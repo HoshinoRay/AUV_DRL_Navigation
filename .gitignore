@@ -53,3 +53,5 @@ tb_logs/
 
 hydro_MLP/data/
 *.csv
+
+docs/
