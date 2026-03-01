@@ -1,0 +1,52 @@
+# configs/config.yaml
+
+# 默认配置列表 (Hydra)
+defaults:
+  - env: default             # 加载 configs/env/default.yaml
+  - task: stage1_navigate    # 默认加载 Stage 1，运行时可以用命令行覆盖
+  - _self_                   # 允许本文件覆盖默认值
+
+# 全局参数
+project_name: "AUV_Control_Yuyuan"
+seed: 42
+device: "cuda"               # 或 "cpu"
+
+total_timesteps: 5000000    # 建议增加到 1M。多核下 400k 很快就跑完了，由于是连续控制，可能还没完全收敛
+
+# ==========================================
+# 多进程与并行参数 (直接在这里管理)
+# ==========================================
+num_envs: 4                  # 并行环境数量 (建议 4~8，不要太大以免 GPU 成为瓶颈)
+eval_freq: 10000             # 评估频率 (全局步数)
+save_freq: 50000             # 存档频率 (全局步数)
+
+# 3. 算法参数 (SAC)
+hyperparams:
+  # --- 基础参数 ---
+  learning_rate: 3.0e-4
+  buffer_size: 1000000
+  batch_size: 512            # 多核采样数据量变大，Batch Size 建议从 256 提升到 512 使梯度更稳定
+  gamma: 0.99
+  tau: 0.005
+  ent_coef: "auto"
+  learning_starts: 5000      # 只有新模型需要热身，加载模型时代码会自动设为0
+  
+  # --- 多核 SAC 的频率适配 ---
+  train_freq: 1              # 每次调用底层 env.step() 就触发网络更新
+  # 利用 Hydra 的动态插值，强制让 梯度更新次数 = 环境数量
+  # 这样无论你把 num_envs 改成几，始终保持 1:1 的数据/更新比 (UTD Ratio)，绝不浪费样本！
+  gradient_steps: ${num_envs}
+
+# 预训练/课程迁移配置
+pretrained:
+  model_path: null  
+  vecnorm_path: null  
+  
+  load_buffer: False
+  buffer_path: null
+
+  reset_timesteps: True
+  save_buffer_at_end: True
+  
+# 5. 路径管理
+weights_dir: "src/weights"

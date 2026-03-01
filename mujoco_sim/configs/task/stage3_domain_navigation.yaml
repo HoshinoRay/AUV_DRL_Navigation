@@ -1,0 +1,35 @@
+# configs/task/stage3_domain_navigation.yaml
+name: "domain_navigation"
+_target_: src.envs.tasks.domain_navigation.DomainNavigationTask
+
+reward_weights:
+  phi_dist: 80.0
+  w_align_err: 2.0
+  w_roll_err: 1.5
+  w_sway_vel: 1.0
+  time_penalty: 0.1
+  w_accel: 0.03
+  w_delta_accel: 0.5
+  w_energy: 0.7
+  bonus_roll: 0.2
+  success: 300.0
+  w_final_bonus: 200.0
+  w_collision: 200.0      # 撞击致死的巨大惩罚 (注意代码里是减去它，这里填正数)
+  w_danger_zone: 1.0      # 距离越近，每步扣血越快
+  w_survival: 0.1          # 鼓励在危险环境中存活的微小加分 (防止冻结机器人)
+
+goals:
+  success_dist: 2.0
+  max_dist: 45.0
+  start_pos: [-13.0, 0.0, 10.0]   
+  target_pos: [18.0, 0.0, 10.0]
+
+safety:
+  warning_distance: 3.5   # A* 安全膨胀半径是 1.5，警告区设在 3.5 左右即可
+  critical_distance: 0.5
+
+curriculum:
+  initial_stage: 0         # 默认从 0 阶段开始
+  max_stage: 4            # 最高阶段
+  target_success_rate: 0.85 # 升级阈值
+  window_size: 60         # 评估窗口

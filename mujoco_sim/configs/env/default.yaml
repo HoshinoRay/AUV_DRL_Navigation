@@ -1,0 +1,19 @@
+# configs/env/default.yaml
+
+# 你的 XML 文件相对于项目根目录的路径
+xml_path: "assets/yuyuan.xml"
+
+# 仿真参数
+frame_skip: 50      # step() 中循环多少次 mujoco_step
+max_steps: 650      # 每个 Episode 最大步数
+render_mode: null   # 训练时通常为 null，评估时为 "human"
+
+# 初始状态随机化范围 (Reset 逻辑用)
+randomization:
+  pos_noise: [1.5, 1.5, 1.0]  # x, y, z 范围
+  angle_noise: [0.3, 0.3, 0.2] # roll, pitch, yaw (弧度)
+
+weights:
+  mlp: "weights/best_hydro_model.pth"
+  scaler_x: "weights/scaler_X.pkl"
+  scaler_y: "weights/scaler_Y.pkl"

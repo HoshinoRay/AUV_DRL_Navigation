@@ -1,0 +1,202 @@
+<mujoco model="yuyuan">
+
+  <compiler angle="degree" coordinate="local" inertiafromgeom="false" meshdir="./"/>
+  <option timestep="0.002" density="0" viscosity="0" integrator="RK4" />
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global offwidth="1920" offheight="1080" elevation="-20" azimuth="120"/>
+  </visual>
+
+  <default>
+    <geom type="mesh" contype="1" conaffinity="1" group="1" mass="0"/>
+  </default>
+
+  <asset>
+    <mesh name="hull_mesh" file="hull_hydro.obj"/>
+    <mesh name="duct_mesh" file="duct_hydro.obj"/>
+
+    <!-- 3. 高级材质定义 -->
+    <!-- 亮橙黄（警告色）：增加高光反射，模拟金属烤漆 -->
+    <material name="mat_yellow" rgba="1.0 0.7 0.0 1" shininess="0.8" specular="0.8" reflectance="0.5"/>
+    <!-- 哑光碳素黑 -->
+    <material name="mat_black" rgba="0.12 0.12 0.15 1" shininess="0.2" specular="0.3"/>
+    <!-- 半透明磨砂玻璃（障碍物专用）：关键在于 alpha=0.4 和 reflectance -->
+    <material name="mat_glass" rgba="0.3 0.4 0.5 0.5" shininess="0.9" specular="1.0" reflectance="0.4"/>
+    <!-- 霓虹目标点 -->
+    <material name="mat_target" rgba="0.0 1.0 1.0 0.8" emission="0.6"/>
+
+    <material name="mat_grey" rgba="0.3 0.3 0.3 1"/>
+
+    <texture type="skybox" builtin="gradient" rgb1=".3 .5 .7" rgb2="0 0 0" width="32" height="512"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+    <material name="mat_floor" texture="grid" texrepeat="1 1" texuniform="true" reflectance=".2"/>
+  </asset>
+
+  <worldbody>
+    <!-- ================= 避障任务：障碍物对象池 ================= -->
+    <!-- 预分配 10 个障碍物。不用的时候我们会把它们移到坐标 (999, 999, 999) 隐藏起来 -->
+    <body name="obs_0" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_0" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_1" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_1" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_2" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_2" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_3" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_3" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_4" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_4" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_5" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_5" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_6" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_6" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_7" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_7" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_8" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_8" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="obs_9" mocap="true" pos="999 999 999">
+        <geom name="obs_geom_9" type="cylinder" size="1.0 7.5" material="mat_glass" contype="1" conaffinity="1"/>
+    </body>
+    <body name="target_marker" mocap="true" pos="10 0 15">
+        <geom type="sphere" size="0.3" rgba="1 0 0 0.5" contype="0" conaffinity="0"/>
+    </body>
+    <light pos="0 0 10" dir="0 0 -1" directional="true" mode="trackcom"/>
+    <geom name="floor" type="plane" size="300 300 0.3" 
+          rgba=".8 .9 .8 1" material="mat_floor"
+          condim="3" contype="1" conaffinity="1" friction="0.01 0.01 0.01"/>
+
+    <body name="yuyuan" pos="0 0 10">
+      <joint type="free"/>
+
+      <!-- pos: 重心位置，建议使用你之前计算出的 local_com_offset -->
+      <!-- mass: 包含基准附加质量的总质量 -->
+      <!-- diaginertia: 包含全部附加转动惯量的总惯量 [Ixx Iyy Izz] -->
+      <inertial pos="0 0 -0.05" mass="184.19" diaginertia="49.59 58.68 106.25" />
+
+      <geom mesh="hull_mesh" pos="0 -0.35 0" material="mat_yellow" mass="0"/>
+      <geom mesh="hull_mesh" pos="0 0.35 0" material="mat_yellow" mass="0"/>
+      <geom type="box" size="0.2 0.2 0.05" pos="0 0 -0.2" mass="0" group="3" rgba="0 0 0 0"/>
+      
+      <!-- Vertical Ducts -->
+      <geom mesh="duct_mesh" pos="0.45 -0.60 0" material="mat_black" euler="0 -90 180" mass="0"/> <!-- 右前 xyz -->
+      <geom mesh="duct_mesh" pos="0.45 0.60 0" material="mat_black" euler="0 90 0" mass="0"/>  <!-- 左前 -->
+      <geom mesh="duct_mesh" pos="-0.45 -0.60 0" material="mat_black" euler="0 -90 180" mass="0"/> <!-- 右后 -->
+      <geom mesh="duct_mesh" pos="-0.45 0.60 0" material="mat_black" euler="0 90 0" mass="0"/>  <!-- 左后 -->
+      
+      <!-- Horizontal Ducts -->
+      <geom mesh="duct_mesh" pos="0.33 -0.137 0" material="mat_black" euler="0 0 0" mass="0"/> <!-- Horz FR -->
+      <geom mesh="duct_mesh" pos="0.33 0.137 0" material="mat_black" euler="-180 0 0" mass="0"/>  <!-- Horz FL -->
+      <geom mesh="duct_mesh" pos="-0.33 -0.137 0" material="mat_black" euler="0 0 0" mass="0"/> <!-- Horz RR -->
+      <geom mesh="duct_mesh" pos="-0.33 0.137 0" material="mat_black" euler="180 0 0" mass="0"/>  <!-- Horz RL -->
+
+      <!-- Thruster Sites-->
+      <!-- Horizontal Thrusters -->
+      <site name="thruster_0" pos="0.33 -0.137 0"  euler="0 90 -45" size="0.07 0.1" type="capsule" rgba="0 1 0 1"/> <!-- 右前 -->
+      <site name="thruster_1" pos="0.33 0.137 0"   euler="0 90 45" size="0.07 0.1" type="capsule" rgba="0 1 0 1"/> <!-- 左前 -->
+      <site name="thruster_2" pos="-0.33 -0.137 0" euler="0 90 45" size="0.07 0.1" type="capsule" rgba="0 1 0 1"/> <!-- 右后 -->
+      <site name="thruster_3" pos="-0.33 0.137 0"  euler="0 90 -45" size="0.07 0.1" type="capsule" rgba="0 1 0 1"/> <!-- 左后 -->
+
+      <!-- Vertical Thrusters -->
+      <site name="thruster_4" pos="0.45 -0.60 0"  euler="0 0 0" size="0.07 0.1" type="capsule" rgba="0 0 1 1"/> <!-- Front Right -->
+      <site name="thruster_5" pos="0.45 0.60 0"   euler="0 0 0" size="0.07 0.1" type="capsule" rgba="0 0 1 1"/> <!-- Front Left -->
+      <site name="thruster_6" pos="-0.45 -0.60 0" euler="0 0 0" size="0.07 0.1" type="capsule" rgba="0 0 1 1"/> <!-- Rear Right-->
+      <site name="thruster_7" pos="-0.45 0.60 0"  euler="0 0 0" size="0.07 0.1" type="capsule" rgba="0 0 1 1"/> <!-- Rear Left -->
+
+      <site name="cob_site" pos="0 0 0" euler="0 0 0" size="0.03" rgba="0 1 1 0.5" type="sphere"/>
+      <site name="com_visual" pos="0 0 -0.05" size="0.03" rgba="1 0 0 1" type="sphere"/>
+
+      <!-- ================= ADDITIONS START ================= -->
+      
+      <!-- 1. IMU Site: Placed at Center of Mass/Geometry -->
+      <site name="imu_site" pos="0 0 0" size="0.01" rgba="1 0 0 1"/>
+
+      <!-- 2. Camera Site: Placed at the nose, looking forward -->
+      <!-- MuJoCo cameras look down their -Z axis. We rotate it to look forward (X) -->
+      <camera name="front_camera" pos="0.6 0 0" euler="90 0 90" fovy="90" mode="fixed"/>
+
+      <!-- 注意：rgba 的最后一个数字全部改成了 0，彻底隐藏射线！ -->
+      
+      <site name="sonar_C"   pos="0.6 0 0" euler="0 90 0"   size="0.02" rgba="1 0 0 0" group="4"/>
+      <site name="sonar_down"   pos="0 0 0"    euler="0 180 0"  size="0.02" rgba="1 0 1 0" group="4"/>
+
+      <!-- [Inner Side] 左右 10-20度 -->
+      <site name="sonar_L10" pos="0.6 0 0" euler="0 90 10"  size="0.02" rgba="1 0.5 0 0" group="4"/>
+      <site name="sonar_R10" pos="0.6 0 0" euler="0 90 -10" size="0.02" rgba="1 0.5 0 0" group="4"/>
+      <site name="sonar_L20" pos="0.6 0 0" euler="0 90 20"  size="0.02" rgba="1 0.5 0 0" group="4"/>
+      <site name="sonar_R20" pos="0.6 0 0" euler="0 90 -20" size="0.02" rgba="1 0.5 0 0" group="4"/>
+
+      <!--[Mid Side] 左右 30-40度 -->
+      <site name="sonar_L30" pos="0.6 0 0" euler="0 90 30"  size="0.02" rgba="1 1 0 0" group="4"/>
+      <site name="sonar_R30" pos="0.6 0 0" euler="0 90 -30" size="0.02" rgba="1 1 0 0" group="4"/>
+      <site name="sonar_L40" pos="0.6 0 0" euler="0 90 40"  size="0.02" rgba="1 1 0 0" group="4"/>
+      <site name="sonar_R40" pos="0.6 0 0" euler="0 90 -40" size="0.02" rgba="1 1 0 0" group="4"/>
+
+      <!-- [Far Side] 左右 50-60度 - 广角余光 -->
+      <site name="sonar_L50" pos="0.6 0 0" euler="0 90 50"  size="0.02" rgba="0 1 0 0" group="4"/>
+      <site name="sonar_R50" pos="0.6 0 0" euler="0 90 -50" size="0.02" rgba="0 1 0 0" group="4"/>
+      <site name="sonar_L60" pos="0.6 0 0" euler="0 90 60"  size="0.02" rgba="0 1 0 0" group="4"/>
+      <site name="sonar_R60" pos="0.6 0 0" euler="0 90 -60" size="0.02" rgba="0 1 0 0" group="4"/>
+
+      <!-- [Vertical] 垂直避障 -->
+      <site name="sonar_Up30"   pos="0.6 0 0" euler="0 60 0"   size="0.02" rgba="0 1 1 0" group="4"/>
+      <site name="sonar_Down30" pos="0.6 0 0" euler="0 120 0"  size="0.02" rgba="0 1 1 0" group="4"/>
+
+      <!-- ================= ADDITIONS END ================= -->
+
+    </body>
+  </worldbody>
+
+  <actuator>
+    <general name="t0_hfr" site="thruster_0" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+    <general name="t1_hfl" site="thruster_1" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+    <general name="t2_hrr" site="thruster_2" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+    <general name="t3_hrl" site="thruster_3" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+    
+    <general name="t4_vfr" site="thruster_4" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+    <general name="t5_vfl" site="thruster_5" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+    <general name="t6_vrr" site="thruster_6" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+    <general name="t7_vrl" site="thruster_7" ctrlrange="-1 1" gear="0 0 155 0 0 0" dyntype="filter" dynprm="0.1"/>
+
+</actuator>
+
+ <!-- ================= SENSOR BLOCK ADDITION ================= -->
+<sensor>
+    <accelerometer name="accel" site="imu_site"/>
+    <gyro name="gyro" site="imu_site"/>
+    <velocimeter name="dvl" site="imu_site"/> <!-- 自动计算机体速度 -->
+    
+    <!-- === 高密度声呐阵列 (15 Sensors) === -->
+    <!-- 垂直方向 -->
+    <rangefinder name="rf_Up30"   site="sonar_Up30"   cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_Down30" site="sonar_Down30" cutoff="12.0" noise="0.05"/>
+
+    <!-- 水平方向: 从左到右依次排列，方便 Python 处理 -->
+    <rangefinder name="rf_L60" site="sonar_L60" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_L50" site="sonar_L50" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_L40" site="sonar_L40" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_L30" site="sonar_L30" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_L20" site="sonar_L20" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_L10" site="sonar_L10" cutoff="12.0" noise="0.05"/>
+    
+    <rangefinder name="rf_C"   site="sonar_C"   cutoff="12.0" noise="0.05"/>
+    
+    <rangefinder name="rf_R10" site="sonar_R10" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_R20" site="sonar_R20" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_R30" site="sonar_R30" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_R40" site="sonar_R40" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_R50" site="sonar_R50" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="rf_R60" site="sonar_R60" cutoff="12.0" noise="0.05"/>
+    <rangefinder name="altimeter" site="sonar_down" cutoff="50.0" noise="0.01"/>
+</sensor>
+
+</mujoco>
