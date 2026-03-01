@@ -1,9 +1,7 @@
 name: "navigate"  
 
-# 2. 你的参数类名 (如果有的话)
 _target_: envs.tasks.navigation_task.NavigationTask
 
-# 3. 奖励权重
 reward_weights:
   phi_dist: 350.0
   w_align_err: 2.5
@@ -17,7 +15,6 @@ reward_weights:
   success: 1500.0
   w_final_bonus: 500.0
 
-# 4. 目标设置
 goals:
   success_dist: 1.0
   max_dist: 50.0
