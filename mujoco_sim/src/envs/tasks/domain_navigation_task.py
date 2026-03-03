@@ -16,11 +16,11 @@ class DomainNavigationTask(BaseTask):
             self.safety = DummySafety()
 
         self.obs_dim = 36 
-        self.planner = AStarPlanner(resolution=0.5, safe_margin=1.0)
+        self.planner = AStarPlanner(resolution=0.05, safe_margin=1.7)
         self.waypoints =[]
         self.current_lookahead_pt = None
         self.last_action = None
-        self.last_global_potential = None  # [修复] 改为全局势能
+        self.last_path_potential = None 
         self.just_reached_waypoint = False # [修复] 初始化标志位
         
     def get_obs_dim(self):
@@ -29,81 +29,116 @@ class DomainNavigationTask(BaseTask):
     def reset(self, env):
         self.last_action = None
         self.current_is_collision = False
-        self.just_reached_waypoint = False
-        # [核心新增] 重置路径跟踪索引，防止继承上一回合的进度
-        self.closest_wp_idx = 0 
-        self.last_reached_idx = -1
+        
+        # [核心设计] 严格单调递增的路径索引
+        self.current_wp_idx = 0 
+        self.lookahead_wp_idx = 0.0  # [核心新增] 前视点最高水位线，保证前视点永不后退
+        self.just_reached_waypoint = False 
+        
         env.target_pos = getattr(env, 'fixed_target_pos', np.array([18.0, 0.0, 10.0]))
         
         active_obstacles = env.scene_builder.get_active_obstacles() 
         start_pos = env.data.xpos[env.robot.body_id].copy()
+        
+        # 1. 仅在回合开始时规划一次 A* 路径
         self.waypoints = self.planner.plan(start_pos, env.target_pos, active_obstacles)
         
-        # 获取第一个前视点
+        # 2.[核心设计] 预计算：沿 A* 路径每个点到达终点的“真实剩余累计距离”
+        self.path_lengths = np.zeros(len(self.waypoints))
+        if len(self.waypoints) > 1:
+            # 从后往前倒推，算出每个点沿着线走到终点的距离
+            for i in range(len(self.waypoints)-2, -1, -1):
+                self.path_lengths[i] = self.path_lengths[i+1] + np.linalg.norm(self.waypoints[i] - self.waypoints[i+1])
+                
+        # 3. 初始化前视点与沿路径势能
         self.current_lookahead_pt = self._get_lookahead_point(start_pos, env.target_pos)
-        
-        # [修复] 势能初始化必须基于全局终点，防止路点切换带来的数值突变断层
-        self.last_global_potential = self._calc_grand_potential(start_pos, env.target_pos)
+        # [核心新增] 初始化平滑前视点
+        self.smoothed_lookahead_pt = self.current_lookahead_pt.copy()
+        self.last_path_potential = self._calc_path_potential(start_pos, env.target_pos)
 
     def _get_lookahead_point(self, pos, target_pos):
+        """[终极优化版] 虚拟目标跟踪 (Virtual Target Tracking)
+        包含动态锚点跃迁（防倒车）与幽灵兔保底牵引（防卡死）
         """
-        获取前视点：寻找路径上距离当前位置最近的点，并向前延伸一段距离
-        pos: 机器人当前 3D 坐标
-        target_pos: 最终目标点坐标 (用于路径为空时的备选)
-        """
-        # 1. 基础安全检查：如果没有路径，直接返回终点
-        if self.waypoints is None or len(self.waypoints) == 0:
+        if getattr(self, 'waypoints', None) is None or len(self.waypoints) == 0:
+            return target_pos
+            
+        if getattr(self, 'current_wp_idx', 0) >= len(self.waypoints) - 1:
             return target_pos
 
-        lookahead_dist = 3.0  # 前视距离（米）
-        
-        # 2. 核心逻辑：找到距离当前位置最近的路点的索引
-        # 我们通过 hasattr 确保在 reset 时已经初始化了索引，如果没有则设为 0
-        if not hasattr(self, 'closest_wp_idx'):
-            self.closest_wp_idx = 0
-            
-        min_dist = float('inf')
-        best_idx = self.closest_wp_idx
-        
-        # 只在当前点及其之后的点中寻找最近点，强制不走回头路
-        # 搜索范围限制在当前索引往后 20 个点，提高效率并防止索引越界
-        search_window = min(len(self.waypoints), self.closest_wp_idx + 20)
-        
-        for i in range(self.closest_wp_idx, search_window):
-            dist = np.linalg.norm(self.waypoints[i] - pos)
-            if dist < min_dist:
-                min_dist = dist
-                best_idx = i
-        
-        # 更新类属性，记录当前已经走到了哪一个点
-        self.closest_wp_idx = best_idx 
-
-        # 3. 判断是否“吞噬”了新的路点 (用于奖励机制)
         self.just_reached_waypoint = False
-        if min_dist < 1.5: # 距离小于 1.5 米认为到达了该点
-            # 只有当索引确实增加时，才触发奖励，防止原地打转刷分
-            if not hasattr(self, 'last_reached_idx'):
-                self.last_reached_idx = -1
+        
+        # =======================================================
+        # 机制 1: 动态锚点跃迁 (滑动投影，彻底杜绝冲过头倒车)
+        # =======================================================
+        # 在当前进度前方找一段窗口 (往后看 60 个点，A* 分辨率 0.05m 的话就是 3.0 米)
+        search_window = min(self.current_wp_idx + 60, len(self.waypoints))
+        
+        min_dist = float('inf')
+        closest_idx = self.current_wp_idx
+        
+        # 找到这 3 米路径里，离当前 AUV 真实位置最近的点
+        for i in range(self.current_wp_idx, search_window):
+            d = np.linalg.norm(self.waypoints[i] - pos)
+            if d < min_dist:
+                min_dist = d
+                closest_idx = i
+                
+        # 如果最近点在前方，说明 AUV 已经“走到了那里”（可能是正道，也可能是冲过头偏离了）
+        # 强制把当前锚点跃迁过去，绝不回头！
+        if closest_idx > self.current_wp_idx:
+            self.current_wp_idx = closest_idx
+            self.just_reached_waypoint = True
             
-            if best_idx > self.last_reached_idx:
-                self.just_reached_waypoint = True
-                self.last_reached_idx = best_idx
+        # 如果离锚点已经很近了（<1.0m），为了防卡死也强制 +1
+        if min_dist < 1.0 and self.current_wp_idx < len(self.waypoints) - 1:
+            self.current_wp_idx += 1
+            self.just_reached_waypoint = True
 
-        # 4. 寻找前视点 (Pure Pursuit)
-        # 从最近点开始往后找，直到找到一个距离机器人超过 lookahead_dist 的点
-        lookahead_pt = self.waypoints[-1] # 默认是路径最后一个点
-        for i in range(self.closest_wp_idx, len(self.waypoints)):
-            dist_to_robot = np.linalg.norm(self.waypoints[i] - pos)
-            if dist_to_robot >= lookahead_dist:
-                lookahead_pt = self.waypoints[i]
+        # 如果锚点到头了，直接返回终点
+        if self.current_wp_idx >= len(self.waypoints) - 1:
+            self.current_wp_idx = len(self.waypoints) - 1
+            return target_pos
+
+        # =======================================================
+        # 机制 2: 幽灵兔保底牵引 (防原地卡死等待)
+        # =======================================================
+        lookahead_dist = 2.0  # 正常视距 2.0 米
+        found_idx = self.current_wp_idx
+        
+        # 寻找距离大于 2.0 米的纯追踪目标点
+        for i in range(self.current_wp_idx, len(self.waypoints)):
+            if np.linalg.norm(self.waypoints[i] - pos) >= lookahead_dist:
+                found_idx = i
                 break
                 
-        return lookahead_pt
+        #[核心修改] 幽灵兔保底速度！
+        # 假设控制频率 10Hz，每步 +0.4 相当于每秒 +4个点(0.2米/秒 的保底逃逸速度)
+        # 如果发现兔子走得太快脱离了视野，可以把 rabbit_speed_idx 调小一点 (比如 0.2)
+        rabbit_speed_idx = 0.2
+        
+        # 更新最高水位线：
+        # 它等于 (自身加上保底速度) 与 (纯追踪找出的前方锚点) 之间的最大值！
+        self.lookahead_wp_idx = max(self.lookahead_wp_idx + rabbit_speed_idx, float(found_idx))
+        
+        # 限制不能超过路径数组的总长度
+        final_idx = min(int(self.lookahead_wp_idx), len(self.waypoints) - 1)
 
-    def _calc_grand_potential(self, pos, target_pos):
-        """ [核心修复] 势能必须基于静止的全局终点，而非移动的前视点 """
-        dist = np.linalg.norm(pos - target_pos)
-        # 归一化到最大距离，保持奖励平滑
+        return self.waypoints[final_idx]
+    def _calc_path_potential(self, pos, target_pos):
+        """ 
+        沿规划路径计算剩余长度势能。
+        完美解决 RL 因为绕弯直线距离变远而自我惩罚打转的问题。
+        """
+        # 如果没有路径，或者点吃完了，退化为全局直线距离
+        if getattr(self, 'current_wp_idx', 0) >= len(self.waypoints):
+            dist = np.linalg.norm(pos - target_pos)
+        else:
+            # 真实剩余距离 = (机器人到当前前沿路点的距离) + (该路点到终点的累计规划路径长度)
+            dist_to_frontier = np.linalg.norm(self.waypoints[self.current_wp_idx] - pos)
+            dist = dist_to_frontier + self.path_lengths[self.current_wp_idx]
+            
+        # 归一化为平滑势能
         phi_dist = - (dist / self.goals.max_dist) * self.cfg.phi_dist 
         return phi_dist
     
@@ -140,13 +175,14 @@ class DomainNavigationTask(BaseTask):
         # 1. 姿态跟踪基于局部前视点 (引导拐弯)
         _, align_cos, up_cos, error_y_roll = self._get_desired_posture(pos, self.current_lookahead_pt, rot_mat)
 
-        # 2. 距离势能基于全局终点 (提供恒定向前的动力，杜绝突变)
-        current_potential = self._calc_grand_potential(pos, env.target_pos)
-        reward_shaping = (current_potential - self.last_global_potential) * 10.0 
+        # 2. [核心修改] 接入“沿路径势能”，告别直线距离陷阱！
+        current_potential = self._calc_path_potential(pos, env.target_pos)
         
-        # [修复] 吞噬路点的奖励现在可以正常触发了
-        if self.just_reached_waypoint:
-            reward_shaping += 33.0  
+        # 势能差：只要顺着 A* 路径走进度增加了，就会得正分
+        reward_shaping = (current_potential - self.last_path_potential) * 10.0 
+        # 吃到路点给个大奖
+        if getattr(self, 'just_reached_waypoint', False):
+            reward_shaping += 5.0  
             
         reward_align = 0.5 * (align_cos + 1.0) * self.cfg.w_align_err 
         reward_roll = 0.5 * (up_cos + 1.0) * self.cfg.w_roll_err
@@ -218,7 +254,7 @@ class DomainNavigationTask(BaseTask):
             time_penalty_applied  
         )
 
-        self.last_global_potential = current_potential
+        self.last_path_potential = current_potential #[注意这里变量名改了]
         self.last_action = action.copy()
 
         info = {
@@ -254,8 +290,16 @@ class DomainNavigationTask(BaseTask):
         pos_world = env.data.xpos[env.robot.body_id]
         rot_mat = env.data.xmat[env.robot.body_id].reshape(3, 3)
 
-        self.current_lookahead_pt = self._get_lookahead_point(pos_world, env.target_pos)
-        target_vec_world = self.current_lookahead_pt - pos_world
+        # 1. 获取原始的跳跃前视点
+        raw_lookahead_pt = self._get_lookahead_point(pos_world, env.target_pos)
+        
+        # 2. [核心新增] 指数移动平均 (EMA) 滤波
+        # alpha 越小越丝滑，越大越敏感。0.1~0.2 是很好的平滑系数
+        alpha = 0.15 
+        self.smoothed_lookahead_pt = (1.0 - alpha) * self.smoothed_lookahead_pt + alpha * raw_lookahead_pt
+        
+        # 3. [重要] 网络观测和朝向计算，全部使用平滑后的点！
+        target_vec_world = self.smoothed_lookahead_pt - pos_world
         
         target_vec_body = rot_mat.T @ target_vec_world
         gravity_body = rot_mat.T @ np.array([0., 0., -1.]) 

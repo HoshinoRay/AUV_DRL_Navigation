@@ -1,5 +1,7 @@
 import numpy as np
 import heapq
+import matplotlib.pyplot as plt
+import os
 
 class AStarPlanner:
     def __init__(self, resolution=0.05, safe_margin=1.88, debug=True):
@@ -152,15 +154,37 @@ class AStarPlanner:
 
     def _print_debug_map(self, grid, path_idx):
         print("\n" + "="*50)
-        print("🗺️  A* 路径规划地图预览 (仅打印1次)")
-        print("🟩=安全  🟥=障碍物(含膨胀)  🟦=规划路线")
-        print("="*50)
-        path_set = set(path_idx)
-        for y in range(grid.shape[1]-1, -1, -1):
-            row_str = ""
-            for x in range(grid.shape[0]):
-                if (x, y) in path_set: row_str += "🟦"
-                elif grid[x, y] == 1: row_str += "🟥"
-                else: row_str += "🟩"
-            print(row_str)
+        print("📸 正在生成 A* 规划高清调试图...")
+        
+        plt.figure(figsize=(10, 10))
+        
+        # 1. 绘制地图背景 
+        # grid 维度是 (X, Y)，imshow 需要 (Y, X)，所以必须转置 (grid.T)
+        # origin='lower' 确保原点在左下角，符合现实世界的物理坐标感
+        plt.imshow(grid.T, cmap='Blues', origin='lower', alpha=0.6)
+        
+        # 2. 提取路径坐标并绘制
+        if path_idx:
+            path_x = [p[0] for p in path_idx]
+            path_y = [p[1] for p in path_idx]
+            
+            # 绘制路径主线
+            plt.plot(path_x, path_y, color='red', linewidth=2.5, label='A* Path')
+            
+            # 绘制起点和终点
+            plt.scatter(path_x[0], path_y[0], color='green', s=150, zorder=5, label='Start')
+            plt.scatter(path_x[-1], path_y[-1], color='purple', s=200, marker='*', zorder=5, label='Target')
+            
+        plt.title(f"A* Planner Debug Map\n(Res: {self.res}m, Safe Margin: {self.safe_margin}m)")
+        plt.xlabel("X (Grid Index)")
+        plt.ylabel("Y (Grid Index)")
+        plt.legend(loc='upper right')
+        plt.grid(True, linestyle=':', alpha=0.5)
+        
+        # 3. 静默保存图片，不阻塞程序运行
+        save_path = "astar_debug_map.png"
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close() # 必须 close 释放内存
+        
+        print(f"✅ 高清调试图已保存至项目根目录: {os.path.abspath(save_path)}")
         print("="*50 + "\n")

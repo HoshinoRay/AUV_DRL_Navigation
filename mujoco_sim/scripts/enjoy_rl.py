@@ -29,19 +29,13 @@ def to_absolute_path(path):
     return os.path.join(hydra.utils.get_original_cwd(), path)
 
 def render_custom_geoms(viewer, raw_env):
-    # 1. 尝试多种路径获取 task
-    task = None
-    if hasattr(raw_env, 'task'):
-        task = raw_env.task
-    elif hasattr(raw_env, '_task'):
-        task = raw_env._task
-    
-    # 2. 如果还是找不到，尝试在 dir 中寻找任何包含 planner 的对象 (不检查 waypoints，因为刚开始可能是空的)
+    # 1. 尝试获取 task
+    task = getattr(raw_env, 'task', getattr(raw_env, '_task', None))
     if task is None:
         for attr_name in dir(raw_env):
             try:
                 attr = getattr(raw_env, attr_name)
-                if hasattr(attr, 'planner'): # planner 通常是初始化的
+                if hasattr(attr, 'planner'): 
                     task = attr
                     break
             except: continue
@@ -49,18 +43,19 @@ def render_custom_geoms(viewer, raw_env):
     if task is None:
         return
 
-    # 3. 获取数据 (增加默认值和容错)
-    # 即使 task.waypoints 还没生成，我们也得保证程序不崩
-    waypoints = getattr(task, 'waypoints', [])
-    lookahead_pt = getattr(task, 'current_lookahead_pt', None)
+    # 2. 提取数据：新增了对 current_wp_idx 和 smoothed_lookahead_pt 的获取
+    waypoints = getattr(task, 'waypoints',[])
+    current_idx = getattr(task, 'current_wp_idx', 0) # 获取走到哪了
+    
+    # 优先使用平滑前视点，如果没有则退化为普通前视点
+    lookahead_pt = getattr(task, 'smoothed_lookahead_pt', getattr(task, 'current_lookahead_pt', None))
 
     scn = viewer.user_scn
     if scn.maxgeom == 0: return
     scn.ngeom = 0
 
-    # 4. 绘制前视点 (红球)
+    # 3. 绘制前视点 (红球)
     if lookahead_pt is not None:
-        # 强制转换为 numpy 数组并检查维度
         l_pt = np.array(lookahead_pt).flatten()
         if l_pt.shape[0] == 3:
             mujoco.mjv_initGeom(
@@ -73,23 +68,25 @@ def render_custom_geoms(viewer, raw_env):
             )
             scn.ngeom += 1
 
-    # 5. 绘制轨迹线 (绿线)
+    # 4. 绘制轨迹线 (绿线)
     if isinstance(waypoints, list) and len(waypoints) > 0:
         try:
-            # 这里的坐标获取要极其小心
             robot_id = raw_env.model.body('yuyuan').id
             robot_pos = raw_env.data.xpos[robot_id].copy()
             
-            # 将 list 转换为可靠的 list of numpy arrays
+            # 【核心修复】利用切片 [current_idx:] 只截取前方还没有走过的路点！
+            # 这样在视觉上就等同于以前的 pop(0) 效果
+            remaining_waypoints = waypoints[current_idx:]
+            
             pts = [robot_pos]
-            for wp in waypoints:
+            for wp in remaining_waypoints:
                 pts.append(np.array(wp).flatten())
 
             for i in range(len(pts) - 1):
                 if scn.ngeom >= scn.maxgeom: break
                 
                 p1, p2 = pts[i], pts[i+1]
-                if np.linalg.norm(p1 - p2) < 1e-4: continue # 过滤重合点
+                if np.linalg.norm(p1 - p2) < 1e-4: continue 
 
                 geom = scn.geoms[scn.ngeom]
                 mujoco.mjv_initGeom(
@@ -103,7 +100,7 @@ def render_custom_geoms(viewer, raw_env):
                 )
                 scn.ngeom += 1
         except Exception as e:
-            pass # 避免在渲染循环中打印成吨的错误
+            pass
     
 
 @hydra.main(config_path="../configs", config_name="config", version_base=None)
