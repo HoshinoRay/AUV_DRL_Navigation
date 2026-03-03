@@ -90,12 +90,12 @@ class SceneBuilder:
         fixed_obstacles = [
             {"pos": [-5.6,  3.3], "radius": 1.2},  
             {"pos": [-3.0, -3.1], "radius": 1.5},  
-            {"pos":[ 1.0,  1.3], "radius": 1.0},  
-            {"pos": [ 4.0, -1.3], "radius": 1.8},  
+            {"pos":[ 1.7,  0.75], "radius": 1.0},  
+            {"pos": [ 4.0, -1.2], "radius": 1.8},  
             {"pos":[ 9.0,  6.9], "radius": 1.5},  
             {"pos": [ 9.0, -5.3], "radius": 1.5},  
             
-            {"pos":[13.0,  0.0], "radius": 1.2},  
+            {"pos":[13.0,  1.3], "radius": 1.2},  
             {"pos":[16.0,  3.1], "radius": 0.8},  
         ]
         

@@ -8,10 +8,8 @@ class DomainNavigationTask(BaseTask):
         self.cfg = self.config.reward_weights
         self.goals = self.config.goals
         
-        # 读取安全配置，如果没有配置则给出安全默认值
         self.safety = getattr(self.config, 'safety', None)
         if self.safety is None:
-            # Fallback 默认值
             class DummySafety:
                 warning_distance = 4.0
                 critical_distance = 0.4
@@ -21,78 +19,95 @@ class DomainNavigationTask(BaseTask):
         self.planner = AStarPlanner(resolution=0.5, safe_margin=1.0)
         self.waypoints =[]
         self.current_lookahead_pt = None
-        
-        # 状态缓存
         self.last_action = None
-        self.last_potential = None  
+        self.last_global_potential = None  # [修复] 改为全局势能
+        self.just_reached_waypoint = False # [修复] 初始化标志位
         
-
     def get_obs_dim(self):
         return self.obs_dim
 
     def reset(self, env):
         self.last_action = None
         self.current_is_collision = False
+        self.just_reached_waypoint = False
+        # [核心新增] 重置路径跟踪索引，防止继承上一回合的进度
+        self.closest_wp_idx = 0 
+        self.last_reached_idx = -1
         env.target_pos = getattr(env, 'fixed_target_pos', np.array([18.0, 0.0, 10.0]))
         
-        # 1. 获取当前场景中的障碍物列表 
-        # (你需要确保 env.scene_builder 里有抛出 active_obstacles 的方法，如果没有请看下文说明)
         active_obstacles = env.scene_builder.get_active_obstacles() 
-        
-        # 2. 调用 A* 进行全局规划
         start_pos = env.data.xpos[env.robot.body_id].copy()
         self.waypoints = self.planner.plan(start_pos, env.target_pos, active_obstacles)
         
-        # 3. 初始化追踪状态
-        self.current_lookahead_pt = self.waypoints[0]
-        pos = env.data.xpos[env.robot.body_id].copy()
-        self.last_potential = self._calc_grand_potential(pos)
+        # 获取第一个前视点
+        self.current_lookahead_pt = self._get_lookahead_point(start_pos, env.target_pos)
+        
+        # [修复] 势能初始化必须基于全局终点，防止路点切换带来的数值突变断层
+        self.last_global_potential = self._calc_grand_potential(start_pos, env.target_pos)
 
-    def _get_lookahead_point(self, pos):
-        """ 
-        核心逻辑：计算 Pure Pursuit 前视点 
-        寻找路径上距离 AUV 至少 lookahead_dist 米的最远 Waypoint
+    def _get_lookahead_point(self, pos, target_pos):
         """
-        lookahead_dist = 3.0 # 前视距离 3 米
-        
-        best_pt = self.waypoints[-1] # 默认终点
-        
-        # 遍历路点，找到第一个尚未到达且距离大于 lookahead_dist 的点
-        for pt in self.waypoints:
-            dist = np.linalg.norm(pt[:2] - pos[:2])
-            # 我们只关心当前位置前方的点 (简单的启发式判断：只要还没走过就行)
-            # 为了简化，我们直接从前往后找
-            if dist > lookahead_dist:
-                best_pt = pt
-                break
-            else:
-                # 已经走过了/太近了，可以从列表中剔除 (弹出)
-                # 实际实现中可以用 index 记录，这里用列表切片简化
-                pass 
-                
-        # 动态剔除已经到达的路点
-        while len(self.waypoints) > 1:
-            dist_to_first = np.linalg.norm(self.waypoints[0][:2] - pos[:2])
-            if dist_to_first < 1.5: # 距离当前路点小于 1.5m 视为到达，弹出
-                self.waypoints.pop(0)
-            else:
-                break
-                
-        # 更新最终前视点 (保证至少是列表第一个点)
-        target_pt = self.waypoints[0] if len(self.waypoints) > 0 else self.waypoints[-1]
-        
-        # 如果距离该线段够远，可以插值平滑，这里直接返回路点即可满足 RL
-        return target_pt
+        获取前视点：寻找路径上距离当前位置最近的点，并向前延伸一段距离
+        pos: 机器人当前 3D 坐标
+        target_pos: 最终目标点坐标 (用于路径为空时的备选)
+        """
+        # 1. 基础安全检查：如果没有路径，直接返回终点
+        if self.waypoints is None or len(self.waypoints) == 0:
+            return target_pos
 
-    def _calc_grand_potential(self, pos):
-        """ 修改势能计算：针对前视点而不是最终点 """
-        dist = np.linalg.norm(pos - self.current_lookahead_pt)
-        # 这里的 max_dist 可以改小，比如 10.0，因为局部目标点一般不会太远
-        phi_dist = - (dist / 10.0) * self.cfg.phi_dist 
+        lookahead_dist = 3.0  # 前视距离（米）
+        
+        # 2. 核心逻辑：找到距离当前位置最近的路点的索引
+        # 我们通过 hasattr 确保在 reset 时已经初始化了索引，如果没有则设为 0
+        if not hasattr(self, 'closest_wp_idx'):
+            self.closest_wp_idx = 0
+            
+        min_dist = float('inf')
+        best_idx = self.closest_wp_idx
+        
+        # 只在当前点及其之后的点中寻找最近点，强制不走回头路
+        # 搜索范围限制在当前索引往后 20 个点，提高效率并防止索引越界
+        search_window = min(len(self.waypoints), self.closest_wp_idx + 20)
+        
+        for i in range(self.closest_wp_idx, search_window):
+            dist = np.linalg.norm(self.waypoints[i] - pos)
+            if dist < min_dist:
+                min_dist = dist
+                best_idx = i
+        
+        # 更新类属性，记录当前已经走到了哪一个点
+        self.closest_wp_idx = best_idx 
+
+        # 3. 判断是否“吞噬”了新的路点 (用于奖励机制)
+        self.just_reached_waypoint = False
+        if min_dist < 1.5: # 距离小于 1.5 米认为到达了该点
+            # 只有当索引确实增加时，才触发奖励，防止原地打转刷分
+            if not hasattr(self, 'last_reached_idx'):
+                self.last_reached_idx = -1
+            
+            if best_idx > self.last_reached_idx:
+                self.just_reached_waypoint = True
+                self.last_reached_idx = best_idx
+
+        # 4. 寻找前视点 (Pure Pursuit)
+        # 从最近点开始往后找，直到找到一个距离机器人超过 lookahead_dist 的点
+        lookahead_pt = self.waypoints[-1] # 默认是路径最后一个点
+        for i in range(self.closest_wp_idx, len(self.waypoints)):
+            dist_to_robot = np.linalg.norm(self.waypoints[i] - pos)
+            if dist_to_robot >= lookahead_dist:
+                lookahead_pt = self.waypoints[i]
+                break
+                
+        return lookahead_pt
+
+    def _calc_grand_potential(self, pos, target_pos):
+        """ [核心修复] 势能必须基于静止的全局终点，而非移动的前视点 """
+        dist = np.linalg.norm(pos - target_pos)
+        # 归一化到最大距离，保持奖励平滑
+        phi_dist = - (dist / self.goals.max_dist) * self.cfg.phi_dist 
         return phi_dist
     
     def _get_desired_posture(self, pos, target, rot_mat):
-        """ 获取姿态偏差 """
         body_x = rot_mat[:, 0]
         body_y = rot_mat[:, 1]
         body_z = rot_mat[:, 2]
@@ -121,18 +136,23 @@ class DomainNavigationTask(BaseTask):
         body_id = env.model.body('yuyuan').id 
         rot_mat = env.data.xmat[body_id].reshape(3, 3)
         pos = env.data.xpos[body_id].copy()
-        target = env.target_pos
 
-        dist, align_cos, up_cos, error_y_roll = self._get_desired_posture(pos, self.current_lookahead_pt, rot_mat)
+        # 1. 姿态跟踪基于局部前视点 (引导拐弯)
+        _, align_cos, up_cos, error_y_roll = self._get_desired_posture(pos, self.current_lookahead_pt, rot_mat)
 
-        # 引导奖励 
-        current_potential = self._calc_grand_potential(pos)
-        reward_shaping = (current_potential - self.last_potential) * 10.0 
-        reward_align = 0.7 * (align_cos + 1.0) * self.cfg.w_align_err 
+        # 2. 距离势能基于全局终点 (提供恒定向前的动力，杜绝突变)
+        current_potential = self._calc_grand_potential(pos, env.target_pos)
+        reward_shaping = (current_potential - self.last_global_potential) * 10.0 
+        
+        # [修复] 吞噬路点的奖励现在可以正常触发了
+        if self.just_reached_waypoint:
+            reward_shaping += 33.0  
+            
+        reward_align = 0.5 * (align_cos + 1.0) * self.cfg.w_align_err 
         reward_roll = 0.5 * (up_cos + 1.0) * self.cfg.w_roll_err
 
         # ----------------------------------------------------
-        # 2. 避障斥力势场 (Repulsive Field) - [重构核心]
+        # 3. 弱化版声呐安全 (Soft Obstacle Penalty)
         # ----------------------------------------------------
         sonar_dists = raw.get('sonar', np.ones(15) * 12.0)
         min_sonar_dist = np.min(sonar_dists)
@@ -140,51 +160,49 @@ class DomainNavigationTask(BaseTask):
         reward_obstacle_penalty = 0.0
         self.current_is_collision = False
 
+        # [核心调整] 因为碰撞不终止回合，这里改为持续性的步进轻微惩罚
+        # 不再一刀切给 w_collision，而是越近惩罚稍大一点，但上限被锁死
         if min_sonar_dist < self.safety.critical_distance:
-            # 撞死
             self.current_is_collision = True
-            reward_obstacle_penalty = self.cfg.w_collision 
-        else:
-            # 危险警告区 - 使用指数衰减函数，距离越近惩罚呈指数上升
-            # 这样智能体会提前感受到平滑的“推力”使其转向，而不是突然撞墙
-            for d in sonar_dists:
-                if d < self.safety.warning_distance:
-                    # 例如 d=4时不惩罚，d=0.5时极度惩罚
-                    penalty_factor = np.exp(-1.5 * (d - self.safety.critical_distance))
-                    reward_obstacle_penalty += self.cfg.w_danger_zone * penalty_factor
-        # 终点区域逻辑
-        reward_success = 0.0
-        reward_final_bonus = 0.0  
-        is_success = False
-        
-        # 单独计算到全局终点的距离
-        dist_to_final = np.linalg.norm(pos - env.target_pos)
-        in_zone = dist_to_final < self.goals.success_dist
+            # 建议将 config 中的 w_collision 改名为 w_collision_step，值设在 1.0 ~ 5.0 左右
+            step_penalty = getattr(self.cfg, 'w_collision_step', 2.0) 
+            reward_obstacle_penalty = step_penalty 
 
-        if in_zone and not self.current_is_collision: # 必须是活着进圈才算赢
-            is_success = True
-            reward_success = self.cfg.success 
-            align_score = (align_cos + 1.0) / 2.0
-            up_score = (up_cos + 1.0) / 2.0
-            w_bonus = getattr(self.cfg, 'w_final_bonus', 500.0) 
-            reward_final_bonus = 0.2 * w_bonus * (align_score + up_score)
-            time_penalty_applied = 0.0
-        else:
-            time_penalty_applied = self.cfg.time_penalty
-            
-        bonus_y_roll = error_y_roll * self.cfg.bonus_roll  
+        # 4. 动力学约束
+        local_vel = raw.get('dvl', np.zeros(3))
+        v_sway, v_heave = local_vel[1], local_vel[2]
+        cost_sway_heave = self.cfg.w_sway_vel * (v_sway**2 + v_heave**2)
 
-        # ----------------------------------------------------
-        # 4. 轻微的成本约束 
-        # ----------------------------------------------------
         gyro = raw.get('gyro', np.zeros(3))
-        cost_energy = 0.05 * self.cfg.w_energy * np.sum(np.square(gyro)) 
+        cost_energy = 0.05 * self.cfg.w_energy * np.sum(np.square(gyro))
         cost_action = 0.05 * self.cfg.w_accel * np.sum(np.square(action))
         
         cost_smooth = 0.0
         if self.last_action is not None:
             cost_smooth = self.cfg.w_delta_accel * np.sum(np.square(action - self.last_action))
 
+        # ----------------------------------------------------
+        # 5. 成功判定 (只看距离，不管碰撞)
+        # ----------------------------------------------------
+        reward_success = 0.0
+        reward_final_bonus = 0.0  
+        is_success = False
+        
+        dist_to_final = np.linalg.norm(pos - env.target_pos)
+        in_zone = dist_to_final < self.goals.success_dist
+
+        # [核心修复] 只要进圈就是成功，哪怕是贴着墙进圈。这才能贴合“弱化避障”的要求
+        if in_zone: 
+            is_success = True
+            reward_success = self.cfg.success 
+            reward_final_bonus = getattr(self.cfg, 'w_final_bonus', 500.0)
+            time_penalty_applied = 0.0
+        else:
+            time_penalty_applied = self.cfg.time_penalty
+
+        bonus_y_roll = error_y_roll * self.cfg.bonus_roll 
+
+        # 6. 总分结算
         total_reward = (
             reward_shaping +      
             reward_align +        
@@ -192,6 +210,7 @@ class DomainNavigationTask(BaseTask):
             reward_success +      
             reward_final_bonus -
             reward_obstacle_penalty - 
+            cost_sway_heave -     
             cost_energy -         
             cost_action -         
             cost_smooth +         
@@ -199,16 +218,15 @@ class DomainNavigationTask(BaseTask):
             time_penalty_applied  
         )
 
-        self.last_potential = current_potential
+        self.last_global_potential = current_potential
         self.last_action = action.copy()
 
         info = {
             "rew/shaping": reward_shaping,
             "rew/align": reward_align,
             "rew/obstacle_penalty": -reward_obstacle_penalty, 
-            "state/real_align_cos": align_cos, 
-            "state/dist": dist,
-            "state/min_sonar_dist": min_sonar_dist, 
+            "rew/cost_sway": -cost_sway_heave,
+            "state/dist_to_final": dist_to_final,
             "is_success": float(is_success),
             "is_collision": float(self.current_is_collision)     
         }
@@ -216,8 +234,6 @@ class DomainNavigationTask(BaseTask):
         return total_reward, is_success, info
     
     def is_done(self, env, current_step, max_steps):
-        """ 终止条件 """
-        # --- 获取全局状态数据 ---
         body_id = env.model.body('yuyuan').id 
         pos = env.data.xpos[body_id].copy()
         target = env.target_pos
@@ -232,12 +248,13 @@ class DomainNavigationTask(BaseTask):
         return False, None
 
     def get_obs(self, env):
+        # 此处逻辑基本正确，无需大改
+        # 你的观测网络能够看到 local lookahead pt，这是很好的设计
         raw = env.sensors.get_raw_data()
         pos_world = env.data.xpos[env.robot.body_id]
         rot_mat = env.data.xmat[env.robot.body_id].reshape(3, 3)
 
-        # [核心修改 1]：网络观测到的目标，不再是遥远的终点，而是局部的“前视目标点”！
-        self.current_lookahead_pt = self._get_lookahead_point(pos_world)
+        self.current_lookahead_pt = self._get_lookahead_point(pos_world, env.target_pos)
         target_vec_world = self.current_lookahead_pt - pos_world
         
         target_vec_body = rot_mat.T @ target_vec_world
@@ -250,10 +267,7 @@ class DomainNavigationTask(BaseTask):
         depth = env.WATER_SURFACE_Z - pos_world[2]
         obs_depth = np.array([np.clip(depth / 50.0, 0.0, 1.0)])
         
-        # 你的 15根声呐数据在这里已经被归一化到了 [0, 1] 并且塞进神经网络了
-        # Agent 会自动将这些维度与 compute_reward 里的惩罚关联起来
         obs_sonar = np.clip(raw.get('sonar', np.zeros(15)) / 12.0, 0.0, 1.0)
-        
         obs_alt = np.array([np.clip(raw.get('altitude', 0) / 50.0, 0.0, 1.0)])
         obs_accel = np.clip(raw['accel'] / 9.81, -3.0, 3.0)
 

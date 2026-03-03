@@ -2,7 +2,7 @@ import numpy as np
 import heapq
 
 class AStarPlanner:
-    def __init__(self, resolution=0.5, safe_margin=1.0, debug=True):
+    def __init__(self, resolution=0.05, safe_margin=1.88, debug=True):
         """
         resolution: 栅格分辨率 (米/格)
         safe_margin: 障碍物膨胀半径 (米)
@@ -13,10 +13,16 @@ class AStarPlanner:
         self.print_count = 0  # [核心新增] 控制打印频率，防止刷屏
         
     def plan(self, start_pos, target_pos, obstacles):
-        # 1. 确定地图边界 (限制 Y 轴，构建虚拟走廊防止 A* 从外侧“逃课”)
-        all_x = [start_pos[0], target_pos[0]] + [obs['pos'][0] for obs in obstacles]
+        # 1. 自适应确定地图边界 
+        all_x =[start_pos[0], target_pos[0]] + [obs['pos'][0] for obs in obstacles]
+        all_y = [start_pos[1], target_pos[1]] + [obs['pos'][1] for obs in obstacles] # [修复] 提取所有Y坐标
+        
         min_x, max_x = min(all_x) - 3.0, max(all_x) + 3.0
-        min_y, max_y = -8.0, 8.0  # 强制 Y 轴范围为 [-8, 8] 的走廊
+        
+        # [修复] 动态推导Y轴，但维持至少宽度为 16 的走廊
+        center_y = (start_pos[1] + target_pos[1]) / 2.0
+        min_y = min(min(all_y) - 3.0, center_y - 8.0) 
+        max_y = max(max(all_y) + 3.0, center_y + 8.0)
         
         width = int((max_x - min_x) / self.res)
         height = int((max_y - min_y) / self.res)

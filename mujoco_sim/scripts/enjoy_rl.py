@@ -9,6 +9,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 import hydra.utils
+import mujoco
 
 # 路径补丁：确保能识别项目根目录
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +27,84 @@ def to_absolute_path(path):
         return path
     # 强制将相对路径转换为项目根目录下的绝对路径
     return os.path.join(hydra.utils.get_original_cwd(), path)
+
+def render_custom_geoms(viewer, raw_env):
+    # 1. 尝试多种路径获取 task
+    task = None
+    if hasattr(raw_env, 'task'):
+        task = raw_env.task
+    elif hasattr(raw_env, '_task'):
+        task = raw_env._task
+    
+    # 2. 如果还是找不到，尝试在 dir 中寻找任何包含 planner 的对象 (不检查 waypoints，因为刚开始可能是空的)
+    if task is None:
+        for attr_name in dir(raw_env):
+            try:
+                attr = getattr(raw_env, attr_name)
+                if hasattr(attr, 'planner'): # planner 通常是初始化的
+                    task = attr
+                    break
+            except: continue
+
+    if task is None:
+        return
+
+    # 3. 获取数据 (增加默认值和容错)
+    # 即使 task.waypoints 还没生成，我们也得保证程序不崩
+    waypoints = getattr(task, 'waypoints', [])
+    lookahead_pt = getattr(task, 'current_lookahead_pt', None)
+
+    scn = viewer.user_scn
+    if scn.maxgeom == 0: return
+    scn.ngeom = 0
+
+    # 4. 绘制前视点 (红球)
+    if lookahead_pt is not None:
+        # 强制转换为 numpy 数组并检查维度
+        l_pt = np.array(lookahead_pt).flatten()
+        if l_pt.shape[0] == 3:
+            mujoco.mjv_initGeom(
+                scn.geoms[scn.ngeom],
+                type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                size=[0.3, 0, 0], 
+                pos=l_pt,
+                mat=np.eye(3).flatten(),
+                rgba=[1.0, 0.0, 0.0, 1.0]
+            )
+            scn.ngeom += 1
+
+    # 5. 绘制轨迹线 (绿线)
+    if isinstance(waypoints, list) and len(waypoints) > 0:
+        try:
+            # 这里的坐标获取要极其小心
+            robot_id = raw_env.model.body('yuyuan').id
+            robot_pos = raw_env.data.xpos[robot_id].copy()
+            
+            # 将 list 转换为可靠的 list of numpy arrays
+            pts = [robot_pos]
+            for wp in waypoints:
+                pts.append(np.array(wp).flatten())
+
+            for i in range(len(pts) - 1):
+                if scn.ngeom >= scn.maxgeom: break
+                
+                p1, p2 = pts[i], pts[i+1]
+                if np.linalg.norm(p1 - p2) < 1e-4: continue # 过滤重合点
+
+                geom = scn.geoms[scn.ngeom]
+                mujoco.mjv_initGeom(
+                    geom, type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+                    size=[0.05, 0, 0], pos=[0,0,0], mat=np.eye(3).flatten(),
+                    rgba=[0.0, 1.0, 0.0, 1.0]
+                )
+                mujoco.mjv_makeConnector(
+                    geom, mujoco.mjtGeom.mjGEOM_CAPSULE, 0.05,
+                    p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]
+                )
+                scn.ngeom += 1
+        except Exception as e:
+            pass # 避免在渲染循环中打印成吨的错误
+    
 
 @hydra.main(config_path="../configs", config_name="config", version_base=None)
 def enjoy(cfg: DictConfig):
@@ -84,6 +163,10 @@ def enjoy(cfg: DictConfig):
     # 【优雅解法】不论外层包了 VecNormalize 还是 DummyVecEnv 还是 Monitor
     # 使用 .unwrapped 可以直接穿透所有 SB3 的 Wrapper，安全拿到原生的 AUVGymEnv
     raw_env = env.venv.envs[0].unwrapped
+    print(f"DEBUG: raw_env 的所有属性列表: {dir(raw_env)}") # 看看里面有没有 'task' 或 '_task'
+    if hasattr(raw_env, 'task'):
+        print(f"DEBUG: 找到了 .task，它的类型是: {type(raw_env.task)}")
+        print(f"DEBUG: .task 拥有的属性: {dir(raw_env.task)}") 
     
     obs = env.reset()
     success_count = 0
@@ -92,26 +175,30 @@ def enjoy(cfg: DictConfig):
     current_step_cnt = 0
 
     print("🚀 启动可视化窗口 (按 Ctrl+C 退出)...")
-    
-    # 使用 Passive Viewer，确保 MuJoCo 能正确绑定 model 和 data
+  
+    # 【修改】：launch_passive 不传 scene_callback
     with mujoco.viewer.launch_passive(raw_env.model, raw_env.data) as viewer:
-        viewer.sync()
+        # 如果需要设置初始视角，可以在这里调 viewer.cam
         
         while viewer.is_running():
-            # 1. 模型预测动作 (deterministic=True 确保测试时动作不带探索噪声)
+            step_start = time.time()
+
+            # 1. RL 推理与环境交互
             action, _ = model.predict(obs, deterministic=True)
-            
-            # 2. 环境步进
             obs, reward, dones, infos = env.step(action)
+            
+            # 2. 核心修复：步数累加 & 向量化环境数据解包
             current_step_cnt += 1
-            
             done = dones[0]
-            info = infos[0] 
+            info = infos[0]
             
-            # 3. 同步渲染画面
+            # 3. 在主循环中调用绘图函数注入几何体
+            render_custom_geoms(viewer, raw_env)
+            
+            # 4. 同步缓冲区（把数据推送到 GUI 渲染线程）
             viewer.sync()
             
-            # 4. 处理回合结束逻辑
+            # 5. 处理回合结束逻辑
             if done:
                 episode_count += 1
                 
@@ -121,7 +208,7 @@ def enjoy(cfg: DictConfig):
                 
                 # --- 获取距离 (兼容多种命名兜底) ---
                 dist = -1.0
-                possible_keys = ['current_dist', 'distance', 'dist_to_target', 'dist', 'state/dist']
+                possible_keys =['current_dist', 'distance', 'dist_to_target', 'dist', 'state/dist']
                 for k in possible_keys:
                     if k in info:
                         dist = info[k]
@@ -154,10 +241,15 @@ def enjoy(cfg: DictConfig):
                 print(f"📊 统计 | 局数: {episode_count} | 胜率: {(success_count/episode_count)*100:.1f}% | 撞毁率: {(crash_count/episode_count)*100:.1f}%")
                 print("-" * 50)
                 
+                # 回合结束，重置当前步数
                 current_step_cnt = 0
 
-            # 5. 控制帧率 (25 FPS) 避免画面闪得太快
-            time.sleep(0.08)
+            # 6. 控制帧率 (避免画面闪得太快)
+            # 考虑到前面可能有物理耗时，用 time.time() 精准控制帧率会更丝滑
+            elapsed = time.time() - step_start
+            if elapsed < 0.08:
+                time.sleep(0.08 - elapsed)
+    
 
 if __name__ == "__main__":
     enjoy()
