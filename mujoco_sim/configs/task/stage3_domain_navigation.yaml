@@ -3,18 +3,19 @@ name: "domain_navigation"
 _target_: src.envs.tasks.domain_navigation.DomainNavigationTask
 
 reward_weights:
-  phi_dist: 300.0
+  phi_dist: 200.0
   w_align_err: 5.0
   w_roll_err: 3.3
   w_sway_vel: 1.6
-  time_penalty: 0.7
-  w_accel: 0.15
+  w_cte: 15.0             # 【必须添加】偏离 A* 路线的惩罚力度！
+  time_penalty: 0.2
+  w_accel: 0.55
   w_delta_accel: 0.5
   w_energy: 1.27
   bonus_roll: 0.7
   success: 600.0
   w_final_bonus: 200.0
-  w_collision: 5.0      # 撞击致死的巨大惩罚 (注意代码里是减去它，这里填正数)
+  w_collision_step: 25.0      # 撞击致死的巨大惩罚 (注意代码里是减去它，这里填正数)
   w_danger_zone: 1.0      # 距离越近，每步扣血越快
   w_survival: 0.1          # 鼓励在危险环境中存活的微小加分 (防止冻结机器人)
 
