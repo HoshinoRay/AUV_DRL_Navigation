@@ -18,12 +18,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from src.envs import AUVGymEnv
 
 # 限制 PyTorch 的 CPU 线程数为 1， each process with one core
-torch.set_num_threads(1)
-torch.set_num_interop_threads(1)
+torch.set_num_threads(4)
+torch.set_num_interop_threads(4)
 
 # 限制 NumPy 的线程数 (视情况而定)
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
 
 def make_env(cfg, rank):
     """
@@ -141,10 +141,17 @@ def main(cfg: DictConfig):
 
     # [核心修改]: 将 DummyVecEnv 替换为 SubprocVecEnv
     # make_env(cfg) 返回的是一个函数，我们执行 n_envs 次生成一个列表
-    if n_envs > 1:
-        env = SubprocVecEnv([make_env(cfg, i) for i in range(n_envs)])
-    else:
-        env = DummyVecEnv([make_env(cfg, 0)])
+    # if n_envs > 1:
+    #     env = SubprocVecEnv([make_env(cfg, i) for i in range(n_envs)])
+    # else:
+    #     env = DummyVecEnv([make_env(cfg, 0)])
+
+    # 强制将环境数量设为 1，专为 SAC 优化
+    n_envs = 1 
+    print(f"⚡ 针对 SAC 优化: 强制启动 {n_envs} 个单进程环境 (DummyVecEnv)...")
+
+    # 彻底弃用 SubprocVecEnv，在主进程中直接运行环境
+    env = DummyVecEnv([make_env(cfg, 0)])
     
     # [保持不变]: 确保 vecnorm 加载路径是正确的 (如果是绝对路径则不变，如果是相对路径需注意)
     # 建议在 config 中尽量使用绝对路径，或者相对于项目根目录的路径
@@ -226,6 +233,12 @@ def main(cfg: DictConfig):
                 print(f"⚠️  警告: 文件不存在: {buffer_path}")
     else:
         print("✨ 初始化全新 SAC 模型")
+
+        # 提取超参数，如果没有特别指定，则注入单环境最优配置
+        hyperparams = dict(cfg.hyperparams)
+        hyperparams.setdefault("train_freq", 1)       # 强行指定每 1 步更新 1 次
+        hyperparams.setdefault("gradient_steps", 1)   # 每次更新计算 1 次梯度
+
         # [核心修改 3]: tensorboard_log 指向 save_dir
         model = SAC(
             "MlpPolicy",
@@ -233,7 +246,7 @@ def main(cfg: DictConfig):
             verbose=1,
             tensorboard_log=save_dir, 
             device=cfg.device,
-            **cfg.hyperparams 
+            **hyperparams 
         )
 
     # 3. 回调函数
@@ -261,7 +274,7 @@ def main(cfg: DictConfig):
     # [新增] 2. 创建 WandB 回调函数
     # ---------------------------------------------------------
     wandb_callback = WandbCallback(
-        gradient_save_freq=1000,   # 每1000步记录一次梯度直方图（用于分析是否梯度消失/爆炸）
+        gradient_save_freq=0,   # 每1000步记录一次梯度直方图（用于分析是否梯度消失/爆炸）
         model_save_path=os.path.join(save_dir, "wandb_models"), # 可选：把模型传到云端
         verbose=2,
     )

@@ -2,21 +2,20 @@
 name: "domain_navigation"
 _target_: src.envs.tasks.domain_navigation.DomainNavigationTask
 
+# 【全新参数体系】
 reward_weights:
-  phi_dist: 300.0
-  w_align_err: 2.5
-  w_roll_err: 3.3
-  w_sway_vel: 0.6
-  time_penalty: 0.2
-  w_accel: 0.15
-  w_delta_accel: 0.5
-  w_energy: 1.27
-  bonus_roll: 0.7
-  success: 600.0
-  w_final_bonus: 200.0
-  w_collision: 5.0      # 撞击致死的巨大惩罚 (注意代码里是减去它，这里填正数)
-  w_danger_zone: 1.0      # 距离越近，每步扣血越快
-  w_survival: 0.1          # 鼓励在危险环境中存活的微小加分 (防止冻结机器人)
+  w_progress: 40.0        # [主导] 前进 1 米给 40 分，主导推进的动力
+  w_cte: 1.0             # [核心] 横向误差惩罚(CTE)，越偏离航线扣分越多，逼迫贴着A*走
+  w_pitch_roll: 20.0      # [防起飞] 严厉惩罚非水平姿态，彻底解决当火箭飞上天的问题
+  w_align: 2.0            # 机头对准 A* 路径前视点的适度加分
+  w_sway_vel: 2.0         # 惩罚侧滑速度
+  w_heave_vel: 2.0        # 惩罚异常的垂直升降速度
+  w_accel: 0.15           # 抑制过大输出
+  w_delta_accel: 0.5      # 动作平滑惩罚
+  time_penalty: 0.2       # 时间惩罚，逼迫尽快完成
+  success: 600.0          # 进圈成功奖励
+  w_final_bonus: 200.0    # 终点奖励
+  w_collision_step: 5.0   # 靠近障碍物时的步进扣分机制
 
 goals:
   success_dist: 2.0

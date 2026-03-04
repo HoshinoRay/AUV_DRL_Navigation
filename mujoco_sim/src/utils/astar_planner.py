@@ -2,6 +2,7 @@ import numpy as np
 import heapq
 import matplotlib.pyplot as plt
 import os
+import math  # [新增] 引入底层数学库，取代缓慢的 numpy 小数组运算
 
 class AStarPlanner:
     def __init__(self, resolution=0.05, safe_margin=1.88, debug=True):
@@ -33,21 +34,33 @@ class AStarPlanner:
         # 2. 构建栅格地图
         grid = np.zeros((width, height), dtype=np.int8)
         
+        # =======================================================
+        # [核心优化 1] Numpy 广播机制取代纯 Python 双层循环
+        # =======================================================
         for obs in obstacles:
             ox, oy = obs['pos']
             r = obs['radius'] + self.safe_margin 
+            r_sq = r ** 2  # 比较平方根以避免开方运算
             
             min_ix = max(0, int((ox - r - min_x) / self.res))
             max_ix = min(width, int((ox + r - min_x) / self.res) + 1)
             min_iy = max(0, int((oy - r - min_y) / self.res))
             max_iy = min(height, int((oy + r - min_y) / self.res) + 1)
             
-            for ix in range(min_ix, max_ix):
-                for iy in range(min_iy, max_iy):
-                    gx = min_x + ix * self.res
-                    gy = min_y + iy * self.res
-                    if np.linalg.norm([gx - ox, gy - oy]) <= r:
-                        grid[ix, iy] = 1
+            if min_ix >= max_ix or min_iy >= max_iy:
+                continue
+                
+            # 生成局部包围盒坐标轴，利用 Broadcasting 一次性算出所有点到圆心的平方距离
+            ix_coords = np.arange(min_ix, max_ix)
+            iy_coords = np.arange(min_iy, max_iy)
+            gx = min_x + ix_coords * self.res
+            gy = min_y + iy_coords * self.res
+            
+            # dist_sq 形状为 (max_ix - min_ix, max_iy - min_iy)
+            dist_sq = (gx[:, None] - ox)**2 + (gy[None, :] - oy)**2
+            
+            # 使用布尔索引，一步完成局部栅格赋值
+            grid[min_ix:max_ix, min_iy:max_iy][dist_sq <= r_sq] = 1
                         
         # 3. 运行 2D A* 搜索
         def get_grid_idx(pos_x, pos_y):
@@ -71,53 +84,68 @@ class AStarPlanner:
             
         path_idx = path1_idx[:-1] + path2_idx
             
-        # 4. 获取 2D 原始路径点 (这是密集的栅格点，台阶状)
+        # 4. 获取 2D 原始路径点
         raw_waypoints_2d =[]
         for (ix, iy) in path_idx:
             wx = min_x + ix * self.res
             wy = min_y + iy * self.res
             raw_waypoints_2d.append(np.array([wx, wy]))
             
-        # =======================================================
-        # 5. [核心优化] 执行极度丝滑的曲线平滑处理
-        # =======================================================
+        # 5. 执行极度丝滑的曲线平滑处理
         smoothed_2d = self._smooth_path(raw_waypoints_2d)
         smoothed_2d[-1] = target_pos[:2].copy() 
 
-        # 终端可视化 Debug (放在平滑之后，你可以欣赏完美的曲线)
         if self.debug and self.print_count < 1:
             self._print_debug_map(grid, path_idx, smoothed_2d, min_x, min_y, mid_idx=mid_idx)
             self.print_count += 1 
         
-        # 6. Z轴基于累计距离的线性插值
+        # =======================================================
+        # [核心优化 2] Z轴计算全盘 Numpy 向量化，消灭累加的 For 循环
+        # =======================================================
         start_z = start_pos[2]
         target_z = target_pos[2]
         
-        cumulative_dists = [0.0]
-        for i in range(1, len(smoothed_2d)):
-            dist = np.linalg.norm(smoothed_2d[i] - smoothed_2d[i-1])
-            cumulative_dists.append(cumulative_dists[-1] + dist)
-            
+        smoothed_arr = np.array(smoothed_2d)
+        
+        # np.diff 计算相邻两点向量，np.linalg.norm(..., axis=1) 计算所有段长度
+        diffs = np.diff(smoothed_arr, axis=0)
+        dists = np.linalg.norm(diffs, axis=1)
+        
+        # np.cumsum 直接算出每个点当前的累计里程
+        cumulative_dists = np.zeros(len(smoothed_arr))
+        cumulative_dists[1:] = np.cumsum(dists)
         total_dist = cumulative_dists[-1]
         
-        final_3d_waypoints =[]
-        for i, pt_2d in enumerate(smoothed_2d):
-            if total_dist == 0:
-                z = target_z
-            else:
-                progress_ratio = cumulative_dists[i] / total_dist
-                z = start_z + progress_ratio * (target_z - start_z)
-            final_3d_waypoints.append(np.array([pt_2d[0], pt_2d[1], z]))
+        if total_dist == 0:
+            zs = np.full(len(smoothed_arr), target_z)
+        else:
+            progress_ratio = cumulative_dists / total_dist
+            zs = start_z + progress_ratio * (target_z - start_z)
             
+        # 组装回原本 list of numpy array 的数据格式
+        final_3d_waypoints = [np.array([pt[0], pt[1], z]) for pt, z in zip(smoothed_arr, zs)]
         final_3d_waypoints[-1][2] = target_z
+        
         return final_3d_waypoints
 
     def _astar_search(self, grid, start, goal, min_y):
-        motions =[(-1,0), (1,0), (0,-1), (0,1), (-1,-1), (-1,1), (1,-1), (1,1)]
+        width, height = grid.shape
+        goal_x, goal_y = goal
+        
+        # 提前把代价值封存进元组，免得循环里做 if-else 判定
+        motions = [(-1,0, 1.0), (1,0, 1.0), (0,-1, 1.0), (0,1, 1.0), 
+                   (-1,-1, 1.414), (-1,1, 1.414), (1,-1, 1.414), (1,1, 1.414)]
+        
         open_set =[]
         heapq.heappush(open_set, (0, start))
         came_from = {}
         g_score = {start: 0}
+        
+        # =======================================================
+        # [核心优化 3] 预计算中心惩罚表，并在内部使用 math.hypot 加速
+        # =======================================================
+        # 避免在几万次寻路计算中反复执行：0.05 * abs(min_y + y * res)
+        y_penalties = 0.05 * np.abs(min_y + np.arange(height) * self.res)
         
         while open_set:
             _, current = heapq.heappop(open_set)
@@ -129,31 +157,28 @@ class AStarPlanner:
                 path.append(start)
                 return path[::-1]
                 
-            for dx, dy in motions:
-                neighbor = (current[0] + dx, current[1] + dy)
-                if 0 <= neighbor[0] < grid.shape[0] and 0 <= neighbor[1] < grid.shape[1]:
-                    if grid[neighbor[0], neighbor[1]] == 1:
+            cx, cy = current
+            for dx, dy, cost in motions:
+                nx, ny = cx + dx, cy + dy
+                
+                if 0 <= nx < width and 0 <= ny < height:
+                    if grid[nx, ny] == 1:
                         continue 
                     
-                    cost = 1.414 if dx != 0 and dy != 0 else 1.0
+                    # O(1) 直接查表获取预处理过的惩罚值
+                    tentative_g = g_score[current] + cost + y_penalties[ny]
                     
-                    real_y = min_y + neighbor[1] * self.res
-                    centerline_penalty = 0.05 * abs(real_y) 
-                    
-                    tentative_g = g_score[current] + cost + centerline_penalty
-                    
+                    neighbor = (nx, ny)
                     if neighbor not in g_score or tentative_g < g_score[neighbor]:
                         came_from[neighbor] = current
                         g_score[neighbor] = tentative_g
-                        h = np.linalg.norm([neighbor[0]-goal[0], neighbor[1]-goal[1]])
+                        
+                        # 放弃慢吞吞的 np.linalg.norm 构建微型数组，直接调用底层 C 的 hypot
+                        h = math.hypot(nx - goal_x, ny - goal_y)
                         heapq.heappush(open_set, (tentative_g + h, neighbor))
         return None
 
     def _smooth_path(self, path):
-        """
-        [全新重写] 双重核滑动平均曲线平滑 (Dual Moving Average Smoothing)
-        能将尖锐的直角和台阶状栅格点，变成极其顺滑的近似 Bezier 弧线！
-        """
         if len(path) < 10: 
             return [p.copy() for p in path]
             
@@ -161,38 +186,31 @@ class AStarPlanner:
         x = path_arr[:, 0]
         y = path_arr[:, 1]
         
-        # 窗口大小决定了转弯半径，30个点(1.5米)能切出非常完美的弯道弧度
         window = min(30, len(path_arr) // 3)
         if window < 3:
             return[p.copy() for p in path]
             
-        # 1. Padding 延长：在首尾复制端点，防止平滑后路径两端往回缩短
         x_pad = np.pad(x, (window, window), mode='edge')
         y_pad = np.pad(y, (window, window), mode='edge')
         
         kernel = np.ones(window) / window
         
-        # 2. 第一重平滑：滤除栅格带来的锯齿台阶效应
         x_smooth = np.convolve(x_pad, kernel, mode='same')
         y_smooth = np.convolve(y_pad, kernel, mode='same')
         
-        # 3. 第二重平滑：把直角切成高阶连续的优雅平滑弧线 (类 B-Spline)
         x_smooth = np.convolve(x_smooth, kernel, mode='same')
         y_smooth = np.convolve(y_smooth, kernel, mode='same')
         
-        # 4. 掐头去尾，剥离刚刚 padding 加上的辅助点
         x_final = x_smooth[window:-window]
         y_final = y_smooth[window:-window]
         
         smoothed_points = np.vstack((x_final, y_final)).T
         
-        # 5. 均匀重采样：每隔约 0.2 米提取一个点，降低数据量并保持间距均匀
         final_path = [path_arr[0]] 
         for pt in smoothed_points:
             if np.linalg.norm(pt - final_path[-1]) > 0.2:
                 final_path.append(pt)
                 
-        # 确保强力接驳终点
         if np.linalg.norm(final_path[-1] - path_arr[-1]) > 0.05:
             final_path.append(path_arr[-1])
             
@@ -205,13 +223,11 @@ class AStarPlanner:
         plt.figure(figsize=(10, 10))
         plt.imshow(grid.T, cmap='Blues', origin='lower', alpha=0.6)
         
-        # 绘制原始栅格粗糙路径 (浅色细线，用于对比)
         if raw_path_idx:
             raw_x = [p[0] for p in raw_path_idx]
             raw_y = [p[1] for p in raw_path_idx]
             plt.plot(raw_x, raw_y, color='pink', linewidth=1.5, linestyle='--', label='Raw Grid Path')
             
-            # 绘制极度平滑后的弧线！需要将坐标转换回栅格索引系用于显示
             smooth_ix = [(p[0] - min_x) / self.res for p in smoothed_2d]
             smooth_iy = [(p[1] - min_y) / self.res for p in smoothed_2d]
             plt.plot(smooth_ix, smooth_iy, color='red', linewidth=3.5, label='Smoothed Curved Path')
