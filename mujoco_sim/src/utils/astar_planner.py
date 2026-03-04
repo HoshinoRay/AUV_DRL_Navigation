@@ -5,14 +5,10 @@ import os
 
 class AStarPlanner:
     def __init__(self, resolution=0.05, safe_margin=1.88, debug=True):
-        """
-        resolution: 栅格分辨率 (米/格)
-        safe_margin: 障碍物膨胀半径 (米)
-        """
         self.res = resolution
         self.safe_margin = safe_margin
         self.debug = debug
-        self.print_count = 0  # [核心新增] 控制打印频率，防止刷屏
+        self.print_count = 0  
         
     def plan(self, start_pos, target_pos, obstacles):
         # 1. 自适应确定地图边界 
