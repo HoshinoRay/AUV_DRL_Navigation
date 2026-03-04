@@ -89,7 +89,8 @@ class SceneBuilder:
         # 定义 8 个障碍物的绝对坐标 [x, y] 和 半径 radius
         fixed_obstacles = [
             {"pos": [-5.6,  3.3], "radius": 1.2},  
-            {"pos": [-3.0, -3.1], "radius": 1.5},  
+            {"pos": [-3.0, -3.1], "radius": 1.5}, 
+            
             {"pos":[ 1.7,  0.75], "radius": 1.0},  
             {"pos": [ 4.0, -1.2], "radius": 1.8},  
             {"pos":[ 9.0,  6.9], "radius": 1.5},  

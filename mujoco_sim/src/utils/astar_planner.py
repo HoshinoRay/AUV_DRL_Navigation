@@ -15,13 +15,17 @@ class AStarPlanner:
         self.print_count = 0  # [核心新增] 控制打印频率，防止刷屏
         
     def plan(self, start_pos, target_pos, obstacles):
-        # 1. 自适应确定地图边界 
-        all_x =[start_pos[0], target_pos[0]] + [obs['pos'][0] for obs in obstacles]
-        all_y = [start_pos[1], target_pos[1]] + [obs['pos'][1] for obs in obstacles] # [修复] 提取所有Y坐标
+        # =======================================================
+        # [核心新增] 定义必须经过的强制途经点 (Forced Waypoint)
+        # =======================================================
+        forced_pt = np.array([1.7, 5.2])
+        
+        # 1. 自适应确定地图边界 (将强制点也纳入边界计算，防止地图切得太小)
+        all_x = [start_pos[0], target_pos[0], forced_pt[0]] + [obs['pos'][0] for obs in obstacles]
+        all_y = [start_pos[1], target_pos[1], forced_pt[1]] + [obs['pos'][1] for obs in obstacles] 
         
         min_x, max_x = min(all_x) - 3.0, max(all_x) + 3.0
         
-        # [修复] 动态推导Y轴，但维持至少宽度为 16 的走廊
         center_y = (start_pos[1] + target_pos[1]) / 2.0
         min_y = min(min(all_y) - 3.0, center_y - 8.0) 
         max_y = max(max(all_y) + 3.0, center_y + 8.0)
@@ -48,23 +52,36 @@ class AStarPlanner:
                     if np.linalg.norm([gx - ox, gy - oy]) <= r:
                         grid[ix, iy] = 1
                         
-        # 3. 运行 2D A* 搜索
-        start_idx = (int((start_pos[0] - min_x)/self.res), int((start_pos[1] - min_y)/self.res))
-        goal_idx = (int((target_pos[0] - min_x)/self.res), int((target_pos[1] - min_y)/self.res))
-        
-        start_idx = (np.clip(start_idx[0], 0, width-1), np.clip(start_idx[1], 0, height-1))
-        goal_idx = (np.clip(goal_idx[0], 0, width-1), np.clip(goal_idx[1], 0, height-1))
+        # 3. 运行 2D A* 搜索 (分两段式搜索)
+        def get_grid_idx(pos_x, pos_y):
+            ix = int((pos_x - min_x) / self.res)
+            iy = int((pos_y - min_y) / self.res)
+            return (np.clip(ix, 0, width-1), np.clip(iy, 0, height-1))
+            
+        start_idx = get_grid_idx(start_pos[0], start_pos[1])
+        mid_idx   = get_grid_idx(forced_pt[0], forced_pt[1])
+        goal_idx  = get_grid_idx(target_pos[0], target_pos[1])
 
-        path_idx = self._astar_search(grid, start_idx, goal_idx, min_y)
+        # [安全保障] 强行把强制点所在的栅格挖空，防止 safe_margin 膨胀误杀导致无解
+        grid[mid_idx[0], mid_idx[1]] = 0 
         
-        if not path_idx:
+        # =======================================================
+        # [核心新增] 分段规划：起 -> 强制点 -> 终点
+        # =======================================================
+        path1_idx = self._astar_search(grid, start_idx, mid_idx, min_y)
+        path2_idx = self._astar_search(grid, mid_idx, goal_idx, min_y)
+        
+        if not path1_idx or not path2_idx:
             if self.print_count < 1:
-                print("🚨[A* Planner] 警告: 未找到路径！可能 safe_margin 过大。返回直线！")
-            return[start_pos, target_pos]
+                print("🚨[A* Planner] 警告: 未找到路径！可能 safe_margin 过大或强制点被完全堵死。返回直线！")
+            return [start_pos, target_pos]
+            
+        # 拼接路径 (去掉 path1 的最后一个点，防止中间点重复)
+        path_idx = path1_idx[:-1] + path2_idx
             
         # 4. 终端可视化 Debug (只打印1次)
         if self.debug and self.print_count < 1:
-            self._print_debug_map(grid, path_idx)
+            self._print_debug_map(grid, path_idx, mid_idx=mid_idx)
             self.print_count += 1 
             
         # 5. 获取 2D 原始路径点
@@ -152,15 +169,13 @@ class AStarPlanner:
         smoothed.append(path[-1])
         return smoothed
 
-    def _print_debug_map(self, grid, path_idx):
+    def _print_debug_map(self, grid, path_idx, mid_idx=None):
         print("\n" + "="*50)
-        print("📸 正在生成 A* 规划高清调试图...")
+        print("📸 正在生成 A* 规划高清调试图 (含强制途经点)...")
         
         plt.figure(figsize=(10, 10))
         
         # 1. 绘制地图背景 
-        # grid 维度是 (X, Y)，imshow 需要 (Y, X)，所以必须转置 (grid.T)
-        # origin='lower' 确保原点在左下角，符合现实世界的物理坐标感
         plt.imshow(grid.T, cmap='Blues', origin='lower', alpha=0.6)
         
         # 2. 提取路径坐标并绘制
@@ -174,6 +189,10 @@ class AStarPlanner:
             # 绘制起点和终点
             plt.scatter(path_x[0], path_y[0], color='green', s=150, zorder=5, label='Start')
             plt.scatter(path_x[-1], path_y[-1], color='purple', s=200, marker='*', zorder=5, label='Target')
+            
+            # [新增] 绘制强制途经点
+            if mid_idx is not None:
+                plt.scatter(mid_idx[0], mid_idx[1], color='orange', s=150, marker='D', zorder=6, label='Forced Waypoint')
             
         plt.title(f"A* Planner Debug Map\n(Res: {self.res}m, Safe Margin: {self.safe_margin}m)")
         plt.xlabel("X (Grid Index)")
