@@ -4,11 +4,11 @@ _target_: src.envs.tasks.domain_navigation.DomainNavigationTask
 
 reward_weights:
   phi_dist: 300.0
-  w_align_err: 5.0
+  w_align_err: 2.5
   w_roll_err: 3.3
-  w_sway_vel: 1.6
+  w_sway_vel: 0.6
   time_penalty: 0.2
-  w_accel: 0.25
+  w_accel: 0.15
   w_delta_accel: 0.5
   w_energy: 1.27
   bonus_roll: 0.7
@@ -21,7 +21,7 @@ reward_weights:
 goals:
   success_dist: 2.0
   max_dist: 45.0
-  start_pos: [-13.0, 0.0, 10.0]   
+  start_pos: [-13.0, -3.0, 10.0]   
   target_pos: [18.0, 0.0, 10.0]
 
 safety:

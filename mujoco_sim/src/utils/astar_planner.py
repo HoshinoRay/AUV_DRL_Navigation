@@ -12,16 +12,13 @@ class AStarPlanner:
         self.res = resolution
         self.safe_margin = safe_margin
         self.debug = debug
-        self.print_count = 0  # [核心新增] 控制打印频率，防止刷屏
+        self.print_count = 0 
         
     def plan(self, start_pos, target_pos, obstacles):
-        # =======================================================
-        # [核心新增] 定义必须经过的强制途经点 (Forced Waypoint)
-        # =======================================================
         forced_pt = np.array([1.7, 5.2])
         
-        # 1. 自适应确定地图边界 (将强制点也纳入边界计算，防止地图切得太小)
-        all_x = [start_pos[0], target_pos[0], forced_pt[0]] + [obs['pos'][0] for obs in obstacles]
+        # 1. 自适应确定地图边界
+        all_x =[start_pos[0], target_pos[0], forced_pt[0]] + [obs['pos'][0] for obs in obstacles]
         all_y = [start_pos[1], target_pos[1], forced_pt[1]] + [obs['pos'][1] for obs in obstacles] 
         
         min_x, max_x = min(all_x) - 3.0, max(all_x) + 3.0
@@ -33,12 +30,12 @@ class AStarPlanner:
         width = int((max_x - min_x) / self.res)
         height = int((max_y - min_y) / self.res)
         
-        # 2. 构建栅格地图 (0: 空闲, 1: 障碍物)
+        # 2. 构建栅格地图
         grid = np.zeros((width, height), dtype=np.int8)
         
         for obs in obstacles:
             ox, oy = obs['pos']
-            r = obs['radius'] + self.safe_margin # 包含安全膨胀半径
+            r = obs['radius'] + self.safe_margin 
             
             min_ix = max(0, int((ox - r - min_x) / self.res))
             max_ix = min(width, int((ox + r - min_x) / self.res) + 1)
@@ -52,7 +49,7 @@ class AStarPlanner:
                     if np.linalg.norm([gx - ox, gy - oy]) <= r:
                         grid[ix, iy] = 1
                         
-        # 3. 运行 2D A* 搜索 (分两段式搜索)
+        # 3. 运行 2D A* 搜索
         def get_grid_idx(pos_x, pos_y):
             ix = int((pos_x - min_x) / self.res)
             iy = int((pos_y - min_y) / self.res)
@@ -62,40 +59,37 @@ class AStarPlanner:
         mid_idx   = get_grid_idx(forced_pt[0], forced_pt[1])
         goal_idx  = get_grid_idx(target_pos[0], target_pos[1])
 
-        # [安全保障] 强行把强制点所在的栅格挖空，防止 safe_margin 膨胀误杀导致无解
         grid[mid_idx[0], mid_idx[1]] = 0 
         
-        # =======================================================
-        # [核心新增] 分段规划：起 -> 强制点 -> 终点
-        # =======================================================
         path1_idx = self._astar_search(grid, start_idx, mid_idx, min_y)
         path2_idx = self._astar_search(grid, mid_idx, goal_idx, min_y)
         
         if not path1_idx or not path2_idx:
             if self.print_count < 1:
-                print("🚨[A* Planner] 警告: 未找到路径！可能 safe_margin 过大或强制点被完全堵死。返回直线！")
+                print("🚨[A* Planner] 警告: 未找到路径！返回直线！")
             return [start_pos, target_pos]
             
-        # 拼接路径 (去掉 path1 的最后一个点，防止中间点重复)
         path_idx = path1_idx[:-1] + path2_idx
             
-        # 4. 终端可视化 Debug (只打印1次)
-        if self.debug and self.print_count < 1:
-            self._print_debug_map(grid, path_idx, mid_idx=mid_idx)
-            self.print_count += 1 
-            
-        # 5. 获取 2D 原始路径点
+        # 4. 获取 2D 原始路径点 (这是密集的栅格点，台阶状)
         raw_waypoints_2d =[]
         for (ix, iy) in path_idx:
             wx = min_x + ix * self.res
             wy = min_y + iy * self.res
             raw_waypoints_2d.append(np.array([wx, wy]))
             
-        # 6. 路径抽稀/平滑
+        # =======================================================
+        # 5. [核心优化] 执行极度丝滑的曲线平滑处理
+        # =======================================================
         smoothed_2d = self._smooth_path(raw_waypoints_2d)
         smoothed_2d[-1] = target_pos[:2].copy() 
+
+        # 终端可视化 Debug (放在平滑之后，你可以欣赏完美的曲线)
+        if self.debug and self.print_count < 1:
+            self._print_debug_map(grid, path_idx, smoothed_2d, min_x, min_y, mid_idx=mid_idx)
+            self.print_count += 1 
         
-        # 7. Z轴基于累计距离的线性插值 (极度丝滑的俯仰角)
+        # 6. Z轴基于累计距离的线性插值
         start_z = start_pos[2]
         target_z = target_pos[2]
         
@@ -143,7 +137,6 @@ class AStarPlanner:
                     
                     cost = 1.414 if dx != 0 and dy != 0 else 1.0
                     
-                    # 中心轴引力：轻微惩罚偏离 Y=0 轴的行为，鼓励在中间钻缝
                     real_y = min_y + neighbor[1] * self.res
                     centerline_penalty = 0.05 * abs(real_y) 
                     
@@ -157,53 +150,87 @@ class AStarPlanner:
         return None
 
     def _smooth_path(self, path):
-        if len(path) < 3: return path
-        smoothed = [path[0]]
-        for i in range(1, len(path)-1):
-            v1 = path[i] - smoothed[-1]
-            v2 = path[i+1] - path[i]
-            if np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
-                cos_theta = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
-                if cos_theta < 0.95: 
-                    smoothed.append(path[i])
-        smoothed.append(path[-1])
-        return smoothed
+        """
+        [全新重写] 双重核滑动平均曲线平滑 (Dual Moving Average Smoothing)
+        能将尖锐的直角和台阶状栅格点，变成极其顺滑的近似 Bezier 弧线！
+        """
+        if len(path) < 10: 
+            return [p.copy() for p in path]
+            
+        path_arr = np.array(path)
+        x = path_arr[:, 0]
+        y = path_arr[:, 1]
+        
+        # 窗口大小决定了转弯半径，30个点(1.5米)能切出非常完美的弯道弧度
+        window = min(30, len(path_arr) // 3)
+        if window < 3:
+            return[p.copy() for p in path]
+            
+        # 1. Padding 延长：在首尾复制端点，防止平滑后路径两端往回缩短
+        x_pad = np.pad(x, (window, window), mode='edge')
+        y_pad = np.pad(y, (window, window), mode='edge')
+        
+        kernel = np.ones(window) / window
+        
+        # 2. 第一重平滑：滤除栅格带来的锯齿台阶效应
+        x_smooth = np.convolve(x_pad, kernel, mode='same')
+        y_smooth = np.convolve(y_pad, kernel, mode='same')
+        
+        # 3. 第二重平滑：把直角切成高阶连续的优雅平滑弧线 (类 B-Spline)
+        x_smooth = np.convolve(x_smooth, kernel, mode='same')
+        y_smooth = np.convolve(y_smooth, kernel, mode='same')
+        
+        # 4. 掐头去尾，剥离刚刚 padding 加上的辅助点
+        x_final = x_smooth[window:-window]
+        y_final = y_smooth[window:-window]
+        
+        smoothed_points = np.vstack((x_final, y_final)).T
+        
+        # 5. 均匀重采样：每隔约 0.2 米提取一个点，降低数据量并保持间距均匀
+        final_path = [path_arr[0]] 
+        for pt in smoothed_points:
+            if np.linalg.norm(pt - final_path[-1]) > 0.2:
+                final_path.append(pt)
+                
+        # 确保强力接驳终点
+        if np.linalg.norm(final_path[-1] - path_arr[-1]) > 0.05:
+            final_path.append(path_arr[-1])
+            
+        return final_path
 
-    def _print_debug_map(self, grid, path_idx, mid_idx=None):
+    def _print_debug_map(self, grid, raw_path_idx, smoothed_2d, min_x, min_y, mid_idx=None):
         print("\n" + "="*50)
-        print("📸 正在生成 A* 规划高清调试图 (含强制途经点)...")
+        print("📸 正在生成 A* 规划高清调试图 (已开启极度平滑曲线)...")
         
         plt.figure(figsize=(10, 10))
-        
-        # 1. 绘制地图背景 
         plt.imshow(grid.T, cmap='Blues', origin='lower', alpha=0.6)
         
-        # 2. 提取路径坐标并绘制
-        if path_idx:
-            path_x = [p[0] for p in path_idx]
-            path_y = [p[1] for p in path_idx]
+        # 绘制原始栅格粗糙路径 (浅色细线，用于对比)
+        if raw_path_idx:
+            raw_x = [p[0] for p in raw_path_idx]
+            raw_y = [p[1] for p in raw_path_idx]
+            plt.plot(raw_x, raw_y, color='pink', linewidth=1.5, linestyle='--', label='Raw Grid Path')
             
-            # 绘制路径主线
-            plt.plot(path_x, path_y, color='red', linewidth=2.5, label='A* Path')
+            # 绘制极度平滑后的弧线！需要将坐标转换回栅格索引系用于显示
+            smooth_ix = [(p[0] - min_x) / self.res for p in smoothed_2d]
+            smooth_iy = [(p[1] - min_y) / self.res for p in smoothed_2d]
+            plt.plot(smooth_ix, smooth_iy, color='red', linewidth=3.5, label='Smoothed Curved Path')
             
-            # 绘制起点和终点
-            plt.scatter(path_x[0], path_y[0], color='green', s=150, zorder=5, label='Start')
-            plt.scatter(path_x[-1], path_y[-1], color='purple', s=200, marker='*', zorder=5, label='Target')
+            plt.scatter(smooth_ix[0], smooth_iy[0], color='green', s=150, zorder=5, label='Start')
+            plt.scatter(smooth_ix[-1], smooth_iy[-1], color='purple', s=200, marker='*', zorder=5, label='Target')
             
-            # [新增] 绘制强制途经点
             if mid_idx is not None:
                 plt.scatter(mid_idx[0], mid_idx[1], color='orange', s=150, marker='D', zorder=6, label='Forced Waypoint')
             
-        plt.title(f"A* Planner Debug Map\n(Res: {self.res}m, Safe Margin: {self.safe_margin}m)")
+        plt.title(f"A* Planner Smooth Trajectory\n(Res: {self.res}m, Safe Margin: {self.safe_margin}m)")
         plt.xlabel("X (Grid Index)")
         plt.ylabel("Y (Grid Index)")
         plt.legend(loc='upper right')
         plt.grid(True, linestyle=':', alpha=0.5)
         
-        # 3. 静默保存图片，不阻塞程序运行
         save_path = "astar_debug_map.png"
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close() # 必须 close 释放内存
+        plt.close() 
         
-        print(f"✅ 高清调试图已保存至项目根目录: {os.path.abspath(save_path)}")
+        print(f"✅ 平滑轨迹图已保存至: {os.path.abspath(save_path)}")
         print("="*50 + "\n")
