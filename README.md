@@ -172,18 +172,6 @@ F_fluid = τ_prop − M_total · a̅
 ```
 where `M_total` is the rigid-body + added-mass diagonal and `a̅` is smoothed via Savitzky-Golay + finite difference.
 
-**Prediction accuracy — density plots (predicted vs. ground truth):**
-
-<img src="assets/fig_parity_density.png" width="100%">
-
-*Tight diagonal across Surge, Heave, Roll and Pitch forces confirms the MLP generalises well over the full force/torque range.*
-
-**Prediction quality across velocity regimes:**
-
-<img src="assets/fig_representative_windows.png" width="100%">
-
-*Representative time-windows at low, medium and high velocity. Black = ground truth, blue/pink = MLP prediction. Model tracks well in medium and high regimes; low-velocity noise is inherent to the inverse-dynamics labels.*
-
 ---
 
 ### Step 3 — Train the RL agent (MuJoCo)
@@ -250,27 +238,6 @@ Stage 3 uses an arc-length coordinate system along the A* waypoint path, giving 
   <img src="assets/auv_navigation_demo.jpg" width="55%">
 </p>
 <p align="center"><sub>Stage 3 — GIRONA500 navigating a cluttered domain. Orange solid line: executed trajectory. Orange dashed line: A* reference path.</sub></p>
-
-**RL training results — 5 seeds, shading = ±1 std:**
-
-<table>
-  <tr>
-    <td width="50%">
-      <img src="assets/eval_mean_reward_multiseed.png" width="100%">
-      <p align="center"><sub>Mean evaluation reward</sub></p>
-    </td>
-    <td width="50%">
-      <img src="assets/eval_success_rate_multiseed.png" width="100%">
-      <p align="center"><sub>Evaluation success rate</sub></p>
-    </td>
-  </tr>
-</table>
-
-| Condition | Description |
-|-----------|-------------|
-| **R₀** (red) | Rigid-body baseline — MLP zeroed (`simplified_mode`) |
-| **R_MLP** (green) | Full hydrodynamic MLP plugin |
-| **R_PhysFeat** (blue) | Physics-feature augmented observation |
 
 ---
 
