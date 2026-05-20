@@ -6,14 +6,14 @@ import math  # [新增] 引入底层数学库，取代缓慢的 numpy 小数组�
 
 class AStarPlanner:
     def __init__(self, resolution=0.05, safe_margin=1.88, debug=True):
-        """
-        resolution: 栅格分辨率 (米/格)
-        safe_margin: 障碍物膨胀半径 (米)
-        """
         self.res = resolution
         self.safe_margin = safe_margin
         self.debug = debug
+<<<<<<< HEAD
         self.print_count = 0 
+=======
+        self.print_count = 0  
+>>>>>>> f5475e311da426a55617691006caf3b0b4ea6432
         
     def plan(self, start_pos, target_pos, obstacles):
         forced_pt = np.array([1.7, 5.2])
@@ -248,5 +248,10 @@ class AStarPlanner:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close() 
         
+<<<<<<< HEAD
         print(f"✅ 平滑轨迹图已保存至: {os.path.abspath(save_path)}")
         print("="*50 + "\n")
+=======
+        print(f"✅ 高清调试图已保存至项目根目录: {os.path.abspath(save_path)}")
+        print("="*50 + "\n")
+>>>>>>> f5475e311da426a55617691006caf3b0b4ea6432
