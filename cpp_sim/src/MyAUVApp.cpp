@@ -27,10 +27,8 @@ void MyAUVApp::InitializeGUI()
 
 void MyAUVApp::DoHUD()
 {
-    // 调用父类 HUD
     GraphicalSimulationApp::DoHUD();
 
-    // 获取机器人指针
     sf::Robot* robot = this->getSimulationManager()->getRobot("GIRONA500");
     
     if(robot)

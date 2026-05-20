@@ -1,52 +1,40 @@
-# configs/task/stage3_domain_navigation.yaml
 name: "domain_navigation"
-_target_: src.envs.tasks.domain_navigation.DomainNavigationTask
 
-# 【全新参数体系】
 reward_weights:
-<<<<<<< HEAD
-  w_progress: 40.0        # [主导] 前进 1 米给 40 分，主导推进的动力
-  w_cte: 1.0             # [核心] 横向误差惩罚(CTE)，越偏离航线扣分越多，逼迫贴着A*走
-  w_pitch_roll: 20.0      # [防起飞] 严厉惩罚非水平姿态，彻底解决当火箭飞上天的问题
-  w_align: 2.0            # 机头对准 A* 路径前视点的适度加分
-  w_sway_vel: 2.0         # 惩罚侧滑速度
-  w_heave_vel: 2.0        # 惩罚异常的垂直升降速度
-  w_accel: 0.15           # 抑制过大输出
-  w_delta_accel: 0.5      # 动作平滑惩罚
-  time_penalty: 0.2       # 时间惩罚，逼迫尽快完成
-  success: 600.0          # 进圈成功奖励
-  w_final_bonus: 200.0    # 终点奖励
-  w_collision_step: 5.0   # 靠近障碍物时的步进扣分机制
-=======
-  phi_dist: 200.0
-  w_align_err: 5.0
-  w_roll_err: 3.3
-  w_sway_vel: 1.6
-  w_cte: 15.0             # 【必须添加】偏离 A* 路线的惩罚力度！
-  time_penalty: 0.2
-  w_accel: 0.55
+  # Primary progress reward: +w_progress points per metre of forward advance along path
+  w_progress: 40.0
+  # Cross-track error (CTE) penalty — penalises lateral deviation from A* route
+  w_cte: 1.0
+  # Attitude cost — penalises non-horizontal pitch and roll
+  w_pitch_roll: 20.0
+  # Heading alignment with lookahead point
+  w_align: 2.0
+  # Lateral and vertical velocity costs
+  w_sway_vel: 2.0
+  w_heave_vel: 2.0
+  # Action magnitude and smoothness
+  w_accel: 0.15
   w_delta_accel: 0.5
-  w_energy: 1.27
-  bonus_roll: 0.7
+  # Time penalty per step
+  time_penalty: 0.2
+  # Success bonus on reaching the goal
   success: 600.0
   w_final_bonus: 200.0
-  w_collision_step: 25.0      # 撞击致死的巨大惩罚 (注意代码里是减去它，这里填正数)
-  w_danger_zone: 1.0      # 距离越近，每步扣血越快
-  w_survival: 0.1          # 鼓励在危险环境中存活的微小加分 (防止冻结机器人)
->>>>>>> f5475e311da426a55617691006caf3b0b4ea6432
+  # Obstacle collision penalty per step in the critical zone
+  w_collision_step: 5.0
 
 goals:
   success_dist: 2.0
   max_dist: 45.0
-  start_pos: [-13.0, -3.0, 10.0]   
+  start_pos: [-13.0, -3.0, 10.0]
   target_pos: [18.0, 0.0, 10.0]
 
 safety:
-  warning_distance: 3.5   # A* 安全膨胀半径是 1.5，警告区设在 3.5 左右即可
+  warning_distance: 3.5
   critical_distance: 0.5
 
 curriculum:
-  initial_stage: 0         # 默认从 0 阶段开始
-  max_stage: 4            # 最高阶段
-  target_success_rate: 0.85 # 升级阈值
-  window_size: 60         # 评估窗口
+  initial_stage: 0
+  max_stage: 4
+  target_success_rate: 0.85
+  window_size: 60

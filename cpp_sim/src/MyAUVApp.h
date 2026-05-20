@@ -1,4 +1,4 @@
-#ifndef MY_AUV_APP_H  // 修改点1
+#ifndef MY_AUV_APP_H
 #define MY_AUV_APP_H
 
 #include <core/GraphicalSimulationApp.h>

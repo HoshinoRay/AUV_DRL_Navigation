@@ -37,3 +37,11 @@ hydro_MLP/data/
 *.csv
 
 docs/
+
+# Paper submission & figure artifacts
+ICMA material/
+Latex_article/
+experiments/
+hydro_MLP/final_paper_eval/
+hydro_MLP/paper_eval/
+mujoco_sim/figures/
