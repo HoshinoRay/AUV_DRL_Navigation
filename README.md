@@ -1,4 +1,4 @@
-# AUV Deep RL Navigation — DeepHydroSim
+# Deep RL-based AUV Control Framework— DeepHydroSim
 
 A sim-to-real reinforcement learning framework for Autonomous Underwater Vehicle (AUV) navigation that bridges high-fidelity hydrodynamic simulation with scalable RL training.
 
